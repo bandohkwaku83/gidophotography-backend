@@ -13,6 +13,9 @@ function splitOrigins(raw) {
 /**
  * Browser calls from `admin.*` to `api.*` are cross-origin; Express must answer OPTIONS and
  * send `Access-Control-Allow-*`. Set `CORS_ORIGINS` to a comma-separated list to override defaults.
+ *
+ * Uses `origin: string[] | true` (not a callback that returns false). A `false` callback makes
+ * the cors package call `next()` without handling OPTIONS, which produces “no Allow-Origin” on preflight.
  */
 export function buildCorsMiddleware() {
     const fromEnv = splitOrigins(process.env.CORS_ORIGINS)
@@ -23,23 +26,22 @@ export function buildCorsMiddleware() {
               ? DEFAULT_PRODUCTION_ORIGINS
               : null
 
+    const originOption = allowList === null ? true : allowList
+
+    if (process.env.NODE_ENV === "production") {
+        console.log(
+            `[cors] allowed origins (${fromEnv.length ? "CORS_ORIGINS" : "built-in defaults"}): ${allowList.join(", ")}`
+        )
+    } else {
+        console.log("[cors] development: all origins allowed (set NODE_ENV=production on the live API)")
+    }
+
     return cors({
-        origin(origin, callback) {
-            if (!origin) {
-                return callback(null, true)
-            }
-            if (allowList === null) {
-                return callback(null, true)
-            }
-            const normalized = origin.replace(/\/$/, "")
-            if (allowList.includes(normalized)) {
-                return callback(null, true)
-            }
-            callback(null, false)
-        },
+        origin: originOption,
         credentials: true,
-        methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allowedHeaders: ["Content-Type", "Authorization"],
+        methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+        // Omit to mirror Access-Control-Request-Headers from the browser (safest for custom headers).
+        allowedHeaders: undefined,
         maxAge: 86_400,
     })
 }
