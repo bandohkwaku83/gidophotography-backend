@@ -12,6 +12,7 @@ import shareRoutes from "./routes/shareRoutes.js"
 import dashboardRoutes from "./routes/dashboardRoutes.js"
 import smsRoutes from "./routes/smsRoutes.js"
 import { mongoUrlFromEnv } from "./utils/mongoUrlFromEnv.js"
+import { buildCorsMiddleware } from "./utils/corsMiddleware.js"
 
 // Explicit path so .env is loaded even if cwd differs; override beats empty shell exports
 const envPath = path.join(process.cwd(), ".env")
@@ -19,6 +20,7 @@ const envLoaded = dotenv.config({ path: envPath, override: true })
 
 const app = express()
 
+app.use(buildCorsMiddleware())
 app.use(express.json())
 
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")))
