@@ -18,13 +18,24 @@ export const login = async (req, res) => {
                 .json({ message: "Email and password are required" })
         }
 
-        const user = await User.findOne({ email: email.toLowerCase().trim() })
+        const normalizedEmail = email.toLowerCase().trim()
+        const user = await User.findOne({ email: normalizedEmail })
         if (!user) {
+            if (process.env.NODE_ENV !== "production") {
+                console.warn(
+                    `[auth] login: no user with email ${JSON.stringify(normalizedEmail)} (wrong email or empty DB / different MONGO_URL database).`
+                )
+            }
             return res.status(401).json({ message: "Invalid credentials" })
         }
 
         const isMatch = await user.comparePassword(password)
         if (!isMatch) {
+            if (process.env.NODE_ENV !== "production") {
+                console.warn(
+                    `[auth] login: user exists for ${JSON.stringify(normalizedEmail)} but password did not match.`
+                )
+            }
             return res.status(401).json({ message: "Invalid credentials" })
         }
 

@@ -1,9 +1,13 @@
 import mongoose from "mongoose"
 import dotenv from "dotenv"
+import path from "path"
 import readline from "readline"
+import { fileURLToPath } from "url"
 import User from "../models/User.js"
+import { mongoUrlFromEnv } from "../utils/mongoUrlFromEnv.js"
 
-dotenv.config()
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+dotenv.config({ path: path.join(__dirname, "..", ".env"), override: true })
 
 const rl = readline.createInterface({
     input: process.stdin,
@@ -15,7 +19,12 @@ const ask = (question) =>
 
 const run = async () => {
     try {
-        await mongoose.connect(process.env.MONGO_URL)
+        const mongoUrl = mongoUrlFromEnv()
+        if (!mongoUrl) {
+            console.error("MONGO_URL (or MONGO_URI) is not set in .env.")
+            process.exit(1)
+        }
+        await mongoose.connect(mongoUrl)
         console.log("Connected to MongoDB\n")
 
         const argEmail = process.argv[2]

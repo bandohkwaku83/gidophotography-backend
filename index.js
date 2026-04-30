@@ -1,3 +1,4 @@
+import fs from "fs"
 import express from "express"
 import mongoose from "mongoose"
 import dotenv from "dotenv"
@@ -10,9 +11,11 @@ import settingsRoutes from "./routes/settingsRoutes.js"
 import shareRoutes from "./routes/shareRoutes.js"
 import dashboardRoutes from "./routes/dashboardRoutes.js"
 import smsRoutes from "./routes/smsRoutes.js"
+import { mongoUrlFromEnv } from "./utils/mongoUrlFromEnv.js"
 
-// Load .env from cwd; override so empty shell exports don't hide values from .env
-dotenv.config({ override: true })
+// Explicit path so .env is loaded even if cwd differs; override beats empty shell exports
+const envPath = path.join(process.cwd(), ".env")
+const envLoaded = dotenv.config({ path: envPath, override: true })
 
 const app = express()
 
@@ -66,7 +69,45 @@ app.use((err, req, res, next) => {
 })
 
 const PORT = process.env.PORT || 7000
-const MONGO_URL = process.env.MONGO_URL
+const MONGO_URL = mongoUrlFromEnv()
+
+if (!MONGO_URL) {
+    const exists = fs.existsSync(envPath)
+    const bytes = exists ? fs.statSync(envPath).size : 0
+    const parsedKeys = envLoaded.parsed
+        ? Object.keys(envLoaded.parsed).length
+        : 0
+    console.error(
+        "MONGO_URL is not set. This app reads MONGO_URL (or MONGO_URI) from .env."
+    )
+    console.error(
+        `  File: ${envPath} — ${exists ? `exists (${bytes} bytes)` : "missing"}; dotenv parsed ${parsedKeys} key(s).`
+    )
+    if (exists && bytes > 0 && parsedKeys === 0) {
+        console.error(
+            '  Fix: use exactly one line per variable, e.g. MONGO_URL=mongodb+srv://user:pass@host/db — no leading "export ", no JSON, no bare URI without the variable name.'
+        )
+    }
+    if (envLoaded.error && !exists) {
+        console.error(`  ${envLoaded.error.message}`)
+    }
+    process.exit(1)
+}
+
+const mongoSchemeOk = /^mongodb(\+srv)?:\/\//i.test(MONGO_URL)
+if (!mongoSchemeOk) {
+    const head = MONGO_URL.slice(0, 48).replace(/\s/g, " ")
+    console.error(
+        "MONGO_URL must start with mongodb:// or mongodb+srv:// (MongoDB Node driver requirement)."
+    )
+    console.error(
+        `  Check .env: one line only, e.g. MONGO_URL=mongodb+srv://user:pass@host/db — do not put the key name inside the value (not MONGO_URL=\"MONGO_URL=...\").`
+    )
+    console.error(
+        `  After normalizing stray prefixes, value begins with: ${head ? JSON.stringify(head) : "(empty)"}`
+    )
+    process.exit(1)
+}
 
 mongoose
     .connect(MONGO_URL)
@@ -77,5 +118,18 @@ mongoose
         })
     })
     .catch((error) => {
-        console.log(error)
+        console.error(error)
+        if (error?.code === "ENOTFOUND" && error?.syscall === "querySrv") {
+            console.error(
+                "MongoDB SRV lookup failed: the host after @ in MONGO_URL must be a real DNS name " +
+                    "(e.g. cluster0.xxxxx.mongodb.net from Atlas). Short names or typos cause ENOTFOUND. " +
+                    "For local MongoDB use mongodb://127.0.0.1:27017/yourdb instead of mongodb+srv://."
+            )
+        }
+        if (error?.name === "MongoParseError") {
+            console.error(
+                "MongoParseError: fix MONGO_URL in .env — use mongodb://host:port/db or mongodb+srv://user:pass@cluster.../db from Atlas."
+            )
+        }
+        process.exit(1)
     })
