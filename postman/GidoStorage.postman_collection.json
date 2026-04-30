@@ -1,0 +1,1028 @@
+{
+	"info": {
+		"name": "GidoStorage Backend",
+		"description": "Auth, clients, folders (client SMS after raw/final only when multipart uploadComplete=true on the last batch), dashboard, settings, share (public), and SMS (Arkesel). When settings.watermarkPreviewImages is true, each raw image upload also generates a watermarked JPEG (displayUrl on admin GET folder; public share responses use that URL as uploads[].url / selection[].raw.url when a display file exists). Optional server env: WATERMARK_PREVIEW_TEXT.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:8000",
+			"type": "string"
+		},
+		{
+			"key": "token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "clientId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "folderId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "shareIdentifier",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "rawMediaId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "selectionMediaId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "clientSelectionId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "finalMediaId",
+			"value": "",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "Auth",
+			"item": [
+				{
+					"name": "Login",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const data = pm.response.json();",
+									"    if (data.token) {",
+									"        pm.collectionVariables.set('token', data.token);",
+									"        console.log('Token saved to collection variable.');",
+									"    }",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"email\": \"gidophotography@gmail.com\",\n    \"password\": \"Gid038271!\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/login",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"login"
+							]
+						},
+						"description": "Logs in with email and password. On success, the returned JWT is automatically saved to the {{token}} collection variable and used by other requests."
+					}
+				},
+				{
+					"name": "Forgot password",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"email\": \"gidophotography@gmail.com\",\n    \"newPassword\": \"NewPass123!\",\n    \"confirmPassword\": \"NewPass123!\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/forgot-password",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"forgot-password"
+							]
+						},
+						"description": "Resets a user's password by email. Body requires email, newPassword and confirmPassword."
+					}
+				},
+				{
+					"name": "Admin info",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/me",
+							"host": [
+								"{{baseUrl}}"
+							],
+							"path": [
+								"api",
+								"auth",
+								"me"
+							]
+						},
+						"description": "Returns the currently authenticated user. Requires a valid Bearer token."
+					}
+				},
+				{
+					"name": "Logout",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    pm.collectionVariables.set('token', '');",
+									"    console.log('Token cleared from collection variable.');",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/auth/logout",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "auth", "logout"]
+						},
+						"description": "Logs out the current user. Adds the token to a server-side blacklist so it can no longer be used. Also clears the {{token}} collection variable."
+					}
+				}
+			]
+		},
+		{
+			"name": "Dashboard",
+			"item": [
+				{
+					"name": "Get dashboard",
+					"request": {
+						"method": "GET",
+						"header": [
+							{
+								"key": "Authorization",
+								"value": "Bearer {{token}}"
+							}
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/dashboard",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "dashboard"]
+						},
+						"description": "Returns user, aggregate stats (clients & galleries), recent galleries (cover, title, client, status, dates), and a merged activity feed. Optional query: recentLimit (default 8), activityLimit (default 15)."
+					}
+				}
+			]
+		},
+		{
+			"name": "SMS",
+			"item": [
+				{
+					"name": "SMS meta (placeholders)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/sms/meta",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "sms", "meta"]
+						},
+						"description": "Returns placeholders, recipient types, Arkesel flag, bulkSend, smsBulkDefaultClientName, smsBranding { prefixSet, suffixSet } (SMS_BRAND_PREFIX / SMS_BRAND_SUFFIX on server). Upload SMS uses SMS_NOTIFY_*; see folder upload requests."
+					}
+				},
+				{
+					"name": "Send SMS",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"recipientType\": \"all_clients\",\n    \"message\": \"Hi {{client_name}}, your gallery is ready: {{gallery_link}}\",\n    \"folderId\": \"{{folderId}}\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/sms/send",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "sms", "send"]
+						},
+						"description": "One Arkesel API call per request. For recipientType client, send clientId OR client OR selectedClientId (string id or { _id }). all_clients: {{client_name}} uses SMS_BULK_DEFAULT_CLIENT_NAME / \"there\". Placeholders {{event_date}}/{{gallery_link}} need folderId. See GET /api/sms/meta → singleClientIdFields."
+					}
+				},
+				{
+					"name": "List SMS messages",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/sms/messages?page=1&limit=10&search=&status=",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "sms", "messages"],
+							"query": [
+								{ "key": "page", "value": "1" },
+								{ "key": "limit", "value": "10" },
+								{ "key": "search", "value": "", "description": "Optional. Matches message, recipient name or phone." },
+								{ "key": "status", "value": "", "description": "Optional: sent | failed | pending" }
+							]
+						},
+						"description": "Paginated log for the Recent Messages UI (recipient, message, length, status, costGHS, timestamps). Each document includes trigger: manual | raw_upload | final_upload (manual is POST /api/sms/send; raw_upload / final_upload are automatic after successful upload batches)."
+					}
+				}
+			]
+		},
+		{
+			"name": "Clients",
+			"item": [
+				{
+					"name": "Create client",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    const data = pm.response.json();",
+									"    if (data.client && data.client._id) {",
+									"        pm.collectionVariables.set('clientId', data.client._id);",
+									"        console.log('clientId saved:', data.client._id);",
+									"    }",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Acme Studios\",\n    \"email\": \"contact@acme.com\",\n    \"contact\": \"+233200000000\",\n    \"location\": \"Accra, Ghana\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/clients",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "clients"]
+						},
+						"description": "Creates a new client. Required: name, contact, location. Optional: email. Saves the new client's id into the {{clientId}} collection variable for the other requests."
+					}
+				},
+				{
+					"name": "Get all clients",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/clients?search=",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "clients"],
+							"query": [
+								{ "key": "search", "value": "", "description": "Optional. Filters by name, email, contact or location (case-insensitive)." }
+							]
+						}
+					}
+				},
+				{
+					"name": "Get one client",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/clients/{{clientId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "clients", "{{clientId}}"]
+						}
+					}
+				},
+				{
+					"name": "Update client",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Acme Studios Ltd\",\n    \"contact\": \"+233200000111\",\n    \"location\": \"Kumasi, Ghana\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/clients/{{clientId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "clients", "{{clientId}}"]
+						},
+						"description": "Send only the fields you want to change. Any of name, email, contact, location."
+					}
+				},
+				{
+					"name": "Delete client",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/clients/{{clientId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "clients", "{{clientId}}"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Settings",
+			"item": [
+				{
+					"name": "Get settings",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/settings",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "settings"]
+						},
+						"description": "Returns defaultCoverImageUrl, watermarkPreviewImages (boolean), updatedAt. When watermark is on, new raw uploads get a generated watermarked preview file (see folder raw upload / GET folder / GET share)."
+					}
+				},
+				{
+					"name": "Update default cover image",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{
+									"key": "defaultCoverImage",
+									"type": "file",
+									"src": [],
+									"description": "Image file to use as the system-wide default folder cover."
+								}
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/settings",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "settings"]
+						},
+						"description": "Uploads a default cover image. Use form-data with key 'defaultCoverImage' (type: File)."
+					}
+				},
+				{
+					"name": "Toggle watermark preview",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"watermarkPreviewImages\": true\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/settings",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "settings"]
+						},
+						"description": "Turns watermarkPreviewImages on or off (JSON body). When true, each subsequent POST .../media/raw generates a companion JPEG (*-wm.jpg): images get three large diagonal PREVIEW stamps (no event title); videos get the same plus fixed \"Video — preview only\" at the bottom. Admin GET folder lists originals as url plus displayUrl when generated. Public GET /api/share/:id serves watermarked URLs as url on uploads and nested selection.raw when a display file exists. Existing uploads are unchanged until re-uploaded."
+					}
+				},
+				{
+					"name": "Update settings (cover + watermark together)",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{ "key": "defaultCoverImage", "type": "file", "src": [], "description": "Optional image file." },
+								{ "key": "watermarkPreviewImages", "value": "true", "type": "text", "description": "Optional. true/false." }
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/settings",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "settings"]
+						},
+						"description": "Combined update. You can send any subset of fields; only what you include changes. If watermarkPreviewImages is true, enable watermark generation for new raw uploads (see Toggle watermark preview)."
+					}
+				},
+				{
+					"name": "Reset defaults",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/settings/reset",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "settings", "reset"]
+						},
+						"description": "Resets settings: clears the default cover image (also deletes the file) and turns watermarkPreviewImages off."
+					}
+				}
+			]
+		},
+		{
+			"name": "Folders",
+			"item": [
+				{
+					"name": "Create folder (with cover upload)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    const data = pm.response.json();",
+									"    if (data.folder && data.folder._id) {",
+									"        pm.collectionVariables.set('folderId', data.folder._id);",
+									"        console.log('folderId saved:', data.folder._id);",
+									"    }",
+									"    if (data.folder && data.folder.share && data.folder.share.code) {",
+									"        pm.collectionVariables.set('shareIdentifier', data.folder.share.code);",
+									"        console.log('Share URL:', data.folder.shareUrl);",
+									"    }",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{ "key": "client", "value": "{{clientId}}", "type": "text" },
+								{ "key": "eventName", "value": "John & Mary's Wedding", "type": "text" },
+								{ "key": "eventDate", "value": "2026-05-15", "type": "text" },
+								{ "key": "description", "value": "Wedding shoot", "type": "text" },
+								{ "key": "linkExpiry", "value": "30d", "type": "text", "description": "Optional. never | 7d | 14d | 30d | 60d | 90d | 180d | 365d. See Get share link expiry presets." },
+								{ "key": "coverImage", "type": "file", "src": [], "description": "Optional. If omitted and useDefaultCover=true, the default cover from settings is used." }
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders"]
+						},
+						"description": "Creates a folder. Use form-data. Required: client, eventName, eventDate. Optional: linkExpiry, description, coverImage (file). Saves folderId and shareIdentifier on success."
+					}
+				},
+				{
+					"name": "Create folder (use default cover)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    const data = pm.response.json();",
+									"    if (data.folder && data.folder._id) {",
+									"        pm.collectionVariables.set('folderId', data.folder._id);",
+									"    }",
+									"    if (data.folder && data.folder.share && data.folder.share.code) {",
+									"        pm.collectionVariables.set('shareIdentifier', data.folder.share.code);",
+									"        console.log('Share URL:', data.folder.shareUrl);",
+									"    }",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"client\": \"{{clientId}}\",\n    \"eventName\": \"Sarah's 30th Birthday\",\n    \"eventDate\": \"2026-05-15\",\n    \"description\": \"Birthday shoot\",\n    \"useDefaultCover\": true,\n    \"linkExpiry\": \"30d\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders"]
+						},
+						"description": "Creates a folder using the default cover from settings. JSON body, no file upload."
+					}
+				},
+				{
+					"name": "Get all folders",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/folders?clientId=&search=",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders"],
+							"query": [
+								{ "key": "clientId", "value": "", "description": "Optional. Filter by client id." },
+								{ "key": "search", "value": "", "description": "Optional. Searches event name and description (case-insensitive)." }
+							]
+						}
+					}
+				},
+				{
+					"name": "Get share link expiry presets",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/share-link-expiry-presets",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "share-link-expiry-presets"]
+						},
+						"description": "Returns { presets } for the Link expiry dropdown. Each preset has id (send as linkExpiry), label, days."
+					}
+				},
+				{
+					"name": "Patch share link (expiry / slug only)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const d = pm.response.json();",
+									"    const id = d.folder?.share?.slug || d.folder?.share?.code;",
+									"    if (id) pm.collectionVariables.set('shareIdentifier', id);",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"linkExpiry\": \"30d\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/share",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "share"]
+						},
+						"description": "Updates link expiry and/or slug without changing the share code. Body examples: { \"linkExpiry\": \"never\" }, { \"linkExpiry\": \"90d\" }, { \"expiresAt\": \"...\" }, { \"slug\": \"my-wedding\" }, { \"selectionLocked\": false, \"clearSelectionSubmit\": true } to let the client edit picks again."
+					}
+				},
+				{
+					"name": "Unlock client selections (admin)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"selectionLocked\": false,\n    \"clearSelectionSubmit\": true\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/share",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "share"]
+						},
+						"description": "After a client clicks Submit Selection, use this so they can change picks again (optional)."
+					}
+				},
+				{
+					"name": "Regenerate share link",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const d = pm.response.json();",
+									"    const id = d.folder?.share?.slug || d.folder?.share?.code;",
+									"    if (id) {",
+									"        pm.collectionVariables.set('shareIdentifier', id);",
+									"        console.log('New share URL:', d.folder.shareUrl);",
+									"    }",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"clearSlug\": false,\n    \"linkExpiry\": \"30d\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/share/regenerate",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "share", "regenerate"]
+						},
+						"description": "Issues a new share code (old /share/<code> URLs stop working). Optional: clearSlug true removes custom slug. Optional: linkExpiry / expiresAt / expiresInDays to reset the expiry window from now."
+					}
+				},
+				{
+					"name": "Get one folder",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}"]
+						},
+						"description": "Returns folder details plus uploads (raw originals), selection (client picks with editStatus), and finals. Each upload item: url = original file; when watermark previews are enabled and the server generated a preview, displayUrl = watermarked JPEG. selection[].raw mirrors the same url/displayUrl shape for the linked raw."
+					}
+				},
+				{
+					"name": "Upload raw photo (admin)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    const d = pm.response.json();",
+									"    if (d.media && d.media.length) {",
+									"        pm.collectionVariables.set('rawMediaId', d.media[0]._id);",
+									"        console.log('Uploaded', d.count, 'file(s). rawMediaId (first):', d.media[0]._id);",
+									"    }",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{ "key": "files", "type": "file", "src": [], "description": "Pick many images at once (key: files). Max 1000 files per request; per-file max defaults to 500MB (FOLDER_MAX_UPLOAD_MB in .env)." },
+								{ "key": "uploadComplete", "value": "", "type": "text", "description": "Optional. Omit or leave empty = send client SMS after this batch (default). Set false on intermediate batches when splitting uploads across requests; true on the last batch." }
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/media/raw",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "media", "raw"]
+						},
+						"description": "Batch raw upload. If GET /api/settings has watermarkPreviewImages true, the server generates a watermarked JPEG per image (and a placeholder JPEG for videos) alongside the original; response media[] includes displayUrl when generation succeeded. Client SMS after uploads settle (debounced per folder, SMS_UPLOAD_NOTIFY_DEBOUNCE_MS default 2500ms). smsNotifyScheduled when notify enabled. uploadComplete=false on intermediate batches. Override SMS_NOTIFY_RAW_TEMPLATE."
+					}
+				},
+				{
+					"name": "Delete raw photo (admin)",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/media/raw/{{rawMediaId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "media", "raw", "{{rawMediaId}}"]
+						},
+						"description": "Deletes one raw upload by id (original and generated *-wm.jpg preview if present). Fails if the client has already selected this photo (remove selections first). Same as DELETE .../media/:id if that item is raw."
+					}
+				},
+				{
+					"name": "Upload final delivery (admin)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    const d = pm.response.json();",
+									"    if (d.media && d.media.length && d.media[0]._id) {",
+									"        pm.collectionVariables.set('finalMediaId', d.media[0]._id);",
+									"    }",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{ "key": "files", "type": "file", "src": [], "description": "One or many finals (same field rules as raw). Omit selectionMediaId when uploading multiple." },
+								{ "key": "selectionMediaId", "value": "{{selectionMediaId}}", "type": "text", "description": "Optional, single-file uploads only. Link this final to a client selection _id." },
+								{ "key": "uploadComplete", "value": "", "type": "text", "description": "Optional. Omit = SMS after this batch (default). false = skip SMS for this batch (use on intermediate batches)." }
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/media/final",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "media", "final"]
+						},
+						"description": "selectionMediaId only when uploading exactly one file. Final client SMS is debounced per folder (same as raw). Split uploads: uploadComplete=false on intermediate batches. smsNotifyScheduled."
+					}
+				},
+				{
+					"name": "Delete final delivery (admin)",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/media/final/{{finalMediaId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "media", "final", "{{finalMediaId}}"]
+						},
+						"description": "Deletes one final image by id. Set {{finalMediaId}} from GET folder → finals[]."
+					}
+				},
+				{
+					"name": "Update selection edit status",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"editStatus\": \"in_progress\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/selection/{{selectionMediaId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "selection", "{{selectionMediaId}}"]
+						},
+						"description": "editStatus: pending | in_progress | done. Set {{selectionMediaId}} from GET one folder → selection[]._id."
+					}
+				},
+				{
+					"name": "Mark folder completed",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"status\": \"completed\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/status",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "status"]
+						}
+					}
+				},
+				{
+					"name": "Update folder",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{ "key": "eventName", "value": "John & Mary's Wedding (renamed)", "type": "text" },
+								{ "key": "description", "value": "Updated description", "type": "text" },
+								{ "key": "eventDate", "value": "2026-06-01", "type": "text" },
+								{ "key": "coverImage", "type": "file", "src": [], "description": "Optional. Replaces the cover image." },
+								{ "key": "useDefaultCover", "value": "false", "type": "text", "description": "Set to true to switch to the default cover from settings." },
+								{ "key": "status", "value": "draft", "type": "text", "description": "Optional: draft or completed." }
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}"]
+						},
+						"description": "Send only the fields you want to change. Use form-data so you can also replace the cover image. You can also set status to draft or completed here."
+					}
+				},
+				{
+					"name": "Delete folder",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}"]
+						}
+					}
+				},
+				{
+					"name": "Open shared folder (PUBLIC)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const d = pm.response.json();",
+									"    const f = d.folder?.finals?.[0];",
+									"    if (f && f._id) pm.collectionVariables.set('finalMediaId', f._id);",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"auth": { "type": "noauth" },
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/share/{{shareIdentifier}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "share", "{{shareIdentifier}}"]
+						},
+						"description": "Client gallery bootstrap: uploads, selection, finals with downloadUrl each, counts, canEditSelections, share.selectionLocked / selectionSubmittedAt. When server watermarkPreviewImages is true and a preview file exists, uploads[].url and selection[].raw.url point at the watermarked JPEG (not the original); otherwise url is the original file."
+					}
+				},
+				{
+					"name": "Client pick photo (PUBLIC)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    const d = pm.response.json();",
+									"    if (d.selection && d.selection._id) {",
+									"        pm.collectionVariables.set('clientSelectionId', d.selection._id);",
+									"    }",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"auth": { "type": "noauth" },
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"rawMediaId\": \"{{rawMediaId}}\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/share/{{shareIdentifier}}/selections",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "share", "{{shareIdentifier}}", "selections"]
+						},
+						"description": "Select one raw photo. Response selection.raw uses the same URL rules as GET share (watermarked url when previews exist and setting is on). Use DELETE with clientSelectionId to deselect, or Sync selections to replace the whole set."
+					}
+				},
+				{
+					"name": "Client sync selections (PUBLIC)",
+					"request": {
+						"auth": { "type": "noauth" },
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"rawMediaIds\": [\"{{rawMediaId}}\"]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/share/{{shareIdentifier}}/selections/sync",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "share", "{{shareIdentifier}}", "selections", "sync"]
+						},
+						"description": "Replaces the client's picks with exactly this list of raw media ids (max 500). Returns selection[] with raw URLs following the same watermark rules as GET share."
+					}
+				},
+				{
+					"name": "Client remove selection (PUBLIC)",
+					"request": {
+						"auth": { "type": "noauth" },
+						"method": "DELETE",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/share/{{shareIdentifier}}/selections/{{clientSelectionId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "share", "{{shareIdentifier}}", "selections", "{{clientSelectionId}}"]
+						},
+						"description": "Deselect one photo. selection _id from GET gallery → selection[]."
+					}
+				},
+				{
+					"name": "Client submit selection (PUBLIC)",
+					"request": {
+						"auth": { "type": "noauth" },
+						"method": "POST",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/share/{{shareIdentifier}}/selections/submit",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "share", "{{shareIdentifier}}", "selections", "submit"]
+						},
+						"description": "Locks further pick changes until photographer unlocks via PATCH /folders/:id/share."
+					}
+				},
+				{
+					"name": "Client download final (PUBLIC)",
+					"request": {
+						"auth": { "type": "noauth" },
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/share/{{shareIdentifier}}/finals/{{finalMediaId}}/download",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "share", "{{shareIdentifier}}", "finals", "{{finalMediaId}}", "download"]
+						},
+						"description": "Attachment download of one final. Use finals[].downloadUrl from the gallery GET, or this URL pattern."
+					}
+				}
+			]
+		}
+	]
+}

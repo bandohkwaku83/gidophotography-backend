@@ -1,0 +1,762 @@
+import fs from "fs"
+import path from "path"
+import mongoose from "mongoose"
+import Folder from "../models/Folder.js"
+import FolderMedia, { EDIT_STATUSES } from "../models/FolderMedia.js"
+import { FOLDER_STATUS_VALUES } from "../constants/folderStatus.js"
+import { collectFolderUploadFiles } from "../middleware/upload.js"
+import {
+    scheduleRawUploadSms,
+    scheduleFinalUploadSms,
+} from "../services/uploadSmsNotifications.js"
+import { readUploadCompleteNotify } from "../utils/multipartFlags.js"
+import Settings from "../models/Settings.js"
+import {
+    generateRawDisplayAsset,
+    buildWatermarkedDisplayPaths,
+} from "../utils/rawDisplayWatermark.js"
+
+export const buildPublicUrl = (req, filePath) => {
+    if (!filePath) return ""
+    const normalized = String(filePath).replace(/\\/g, "/")
+    return `${req.protocol}://${req.get("host")}/${normalized}`
+}
+
+const removeFileIfExists = (filePath) => {
+    if (filePath && fs.existsSync(filePath)) {
+        try {
+            fs.unlinkSync(filePath)
+        } catch (_) {}
+    }
+}
+
+export const serializeRawUpload = (req, doc, opts = {}) => {
+    const { maskOriginalWithDisplay = false } = opts
+    const originalUrl = buildPublicUrl(req, doc.filePath)
+    const displayUrl = doc.displayFilePath
+        ? buildPublicUrl(req, doc.displayFilePath)
+        : ""
+    const useDisplay = maskOriginalWithDisplay && displayUrl
+    const out = {
+        _id: doc._id,
+        url: useDisplay ? displayUrl : originalUrl,
+        originalFilename: doc.originalFilename,
+        mimeType: doc.mimeType,
+        size: doc.size,
+        createdAt: doc.createdAt,
+    }
+    if (!maskOriginalWithDisplay && displayUrl) out.displayUrl = displayUrl
+    return out
+}
+
+export const serializeSelection = (req, doc, opts = {}) => {
+    const { maskNestedRaw = false } = opts
+    const raw = doc.rawMediaId
+    const rawObj =
+        raw && typeof raw === "object" && raw.filePath
+            ? serializeRawUpload(req, raw, {
+                  maskOriginalWithDisplay: maskNestedRaw,
+              })
+            : null
+    return {
+        _id: doc._id,
+        editStatus: doc.editStatus,
+        raw: rawObj,
+        rawMediaId: doc.rawMediaId?._id || doc.rawMediaId,
+        createdAt: doc.createdAt,
+        updatedAt: doc.updatedAt,
+    }
+}
+
+export const serializeFinal = (req, doc) => ({
+    _id: doc._id,
+    url: buildPublicUrl(req, doc.filePath),
+    originalFilename: doc.originalFilename,
+    mimeType: doc.mimeType,
+    size: doc.size,
+    selectionMediaId: doc.selectionMediaId || null,
+    createdAt: doc.createdAt,
+})
+
+/** Adds `downloadUrl` for client gallery (authenticated only by share link). */
+export const serializePublicFinal = (req, identifier, f) => {
+    const ident = encodeURIComponent(String(identifier))
+    return {
+        ...f,
+        downloadUrl: `${req.protocol}://${req.get("host")}/api/share/${ident}/finals/${f._id}/download`,
+    }
+}
+
+const loadActiveSharedFolder = async (identifier) => {
+    const folder = await Folder.findOne({
+        "share.enabled": true,
+        $or: [{ "share.slug": identifier }, { "share.code": identifier }],
+    })
+    if (!folder) {
+        return {
+            error: { status: 404, message: "Shared folder not found or no longer available" },
+        }
+    }
+    if (folder.share.expiresAt && folder.share.expiresAt < new Date()) {
+        return { error: { status: 410, message: "This share link has expired" } }
+    }
+    return { folder }
+}
+
+export const getFolderMediaCollections = async (
+    req,
+    folderId,
+    { clientGallery = false } = {}
+) => {
+    const [rawDocs, selectionDocs, finalDocs] = await Promise.all([
+        FolderMedia.find({ folder: folderId, kind: "raw" }).sort({
+            createdAt: 1,
+        }),
+        FolderMedia.find({ folder: folderId, kind: "selection" })
+            .sort({ createdAt: 1 })
+            .populate("rawMediaId"),
+        FolderMedia.find({ folder: folderId, kind: "final" }).sort({
+            createdAt: 1,
+        }),
+    ])
+
+    const rawOpts = { maskOriginalWithDisplay: clientGallery }
+    const selOpts = { maskNestedRaw: clientGallery }
+
+    return {
+        uploads: rawDocs.map((d) => serializeRawUpload(req, d, rawOpts)),
+        selection: selectionDocs.map((d) =>
+            serializeSelection(req, d, selOpts)
+        ),
+        finals: finalDocs.map((d) => serializeFinal(req, d)),
+    }
+}
+
+const rollbackCreatedMedia = async (created) => {
+    for (const { doc, diskPath, displayDiskPath } of created) {
+        removeFileIfExists(diskPath)
+        removeFileIfExists(displayDiskPath)
+        await FolderMedia.deleteOne({ _id: doc._id }).catch(() => {})
+    }
+}
+
+export const uploadRawMedia = async (req, res) => {
+    const fileParts = collectFolderUploadFiles(req)
+    const created = []
+    try {
+        const { id } = req.params
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            for (const f of fileParts) removeFileIfExists(f.path)
+            return res.status(400).json({ message: "Invalid folder id" })
+        }
+        if (fileParts.length === 0) {
+            return res.status(400).json({
+                message: "No files uploaded",
+                hint: 'Use multipart/form-data with field "files" (best for many images). Max size per file is set by FOLDER_MAX_UPLOAD_MB in .env (default 500MB).',
+            })
+        }
+
+        const folder = await Folder.findById(id)
+        if (!folder) {
+            for (const f of fileParts) removeFileIfExists(f.path)
+            return res.status(404).json({ message: "Folder not found" })
+        }
+
+        const settings = await Settings.getSingleton()
+        const watermarkOn = Boolean(settings.watermarkPreviewImages)
+
+        for (const f of fileParts) {
+            const filePath = path.posix.join(
+                "uploads",
+                "folders",
+                id,
+                "raw",
+                path.basename(f.path)
+            )
+            const doc = await FolderMedia.create({
+                folder: id,
+                kind: "raw",
+                filePath,
+                displayFilePath: "",
+                originalFilename: f.originalname,
+                mimeType: f.mimetype,
+                size: f.size,
+            })
+            const row = { doc, diskPath: f.path }
+            created.push(row)
+
+            if (watermarkOn) {
+                const { absolutePath, relativePath } =
+                    buildWatermarkedDisplayPaths(f.path, id)
+                const gen = await generateRawDisplayAsset({
+                    sourcePath: f.path,
+                    outputAbsolutePath: absolutePath,
+                    relativePath,
+                    mimeType: f.mimetype,
+                })
+                if (gen.ok) {
+                    doc.displayFilePath = relativePath
+                    await doc.save()
+                    row.displayDiskPath = absolutePath
+                } else {
+                    console.warn(
+                        "Watermark display not generated:",
+                        f.originalname,
+                        gen.error
+                    )
+                }
+            }
+        }
+
+        const notifySms = readUploadCompleteNotify(req)
+        if (notifySms) {
+            scheduleRawUploadSms(folder._id, req.user?._id)
+        }
+
+        return res.status(201).json({
+            message: `Uploaded ${created.length} photo(s)`,
+            count: created.length,
+            media: created.map(({ doc }) =>
+                serializeRawUpload(req, doc, { maskOriginalWithDisplay: false })
+            ),
+            smsNotifyScheduled: notifySms,
+        })
+    } catch (error) {
+        await rollbackCreatedMedia(created)
+        for (const f of fileParts) removeFileIfExists(f.path)
+        console.error("Upload raw media error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+export const uploadFinalMedia = async (req, res) => {
+    const fileParts = collectFolderUploadFiles(req)
+    const created = []
+    try {
+        const { id } = req.params
+        const rawSel = req.body?.selectionMediaId
+        const trimmedSel =
+            rawSel != null && String(rawSel).trim() !== ""
+                ? String(rawSel).trim()
+                : ""
+        const selectionMediaId = mongoose.Types.ObjectId.isValid(trimmedSel)
+            ? trimmedSel
+            : null
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            for (const f of fileParts) removeFileIfExists(f.path)
+            return res.status(400).json({ message: "Invalid folder id" })
+        }
+        if (fileParts.length === 0) {
+            return res.status(400).json({
+                message: "No files uploaded",
+                hint: 'Same as raw uploads: use field "files" or "file", etc. Max file size: FOLDER_MAX_UPLOAD_MB in .env (default 500MB).',
+            })
+        }
+
+        const folder = await Folder.findById(id)
+        if (!folder) {
+            for (const f of fileParts) removeFileIfExists(f.path)
+            return res.status(404).json({ message: "Folder not found" })
+        }
+
+        let selectionRef = null
+        if (selectionMediaId) {
+            if (fileParts.length > 1) {
+                for (const f of fileParts) removeFileIfExists(f.path)
+                return res.status(400).json({
+                    message:
+                        "selectionMediaId can only be used when uploading one final at a time. Omit it for batch uploads, then link manually if needed.",
+                })
+            }
+            const sel = await FolderMedia.findOne({
+                _id: selectionMediaId,
+                folder: id,
+                kind: "selection",
+            })
+            if (!sel) {
+                for (const f of fileParts) removeFileIfExists(f.path)
+                return res.status(404).json({ message: "Selection not found" })
+            }
+            selectionRef = sel._id
+        }
+
+        for (const f of fileParts) {
+            const filePath = path.posix.join(
+                "uploads",
+                "folders",
+                id,
+                "finals",
+                path.basename(f.path)
+            )
+            const doc = await FolderMedia.create({
+                folder: id,
+                kind: "final",
+                filePath,
+                originalFilename: f.originalname,
+                mimeType: f.mimetype,
+                size: f.size,
+                selectionMediaId: selectionRef,
+            })
+            created.push({ doc, diskPath: f.path })
+        }
+
+        const notifySms = readUploadCompleteNotify(req)
+        if (notifySms) {
+            scheduleFinalUploadSms(folder._id, req.user?._id)
+        }
+
+        return res.status(201).json({
+            message: `Uploaded ${created.length} final image(s)`,
+            count: created.length,
+            media: created.map(({ doc }) => serializeFinal(req, doc)),
+            smsNotifyScheduled: notifySms,
+        })
+    } catch (error) {
+        await rollbackCreatedMedia(created)
+        for (const f of fileParts) removeFileIfExists(f.path)
+        console.error("Upload final media error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+const deleteFolderMediaCore = async (req, res, allowedKinds) => {
+    try {
+        const { id, mediaId } = req.params
+        if (
+            !mongoose.Types.ObjectId.isValid(id) ||
+            !mongoose.Types.ObjectId.isValid(mediaId)
+        ) {
+            return res.status(400).json({ message: "Invalid id" })
+        }
+
+        const doc = await FolderMedia.findOne({
+            _id: mediaId,
+            folder: id,
+        })
+        if (!doc) {
+            return res.status(404).json({ message: "Media not found" })
+        }
+
+        if (!allowedKinds.includes(doc.kind)) {
+            return res.status(400).json({
+                message: `This endpoint only deletes ${allowedKinds.join(" or ")} items. Use the correct URL for ${doc.kind} entries.`,
+            })
+        }
+
+        if (doc.kind === "raw") {
+            const picks = await FolderMedia.countDocuments({
+                folder: id,
+                kind: "selection",
+                rawMediaId: doc._id,
+            })
+            if (picks > 0) {
+                return res.status(400).json({
+                    message:
+                        "Cannot delete this photo because the client has selected it. Remove selections first.",
+                })
+            }
+            removeFileIfExists(doc.filePath)
+            removeFileIfExists(doc.displayFilePath)
+        } else if (doc.kind === "final") {
+            removeFileIfExists(doc.filePath)
+        } else if (doc.kind === "selection") {
+            // no file on disk
+        }
+
+        await FolderMedia.deleteOne({ _id: doc._id })
+
+        return res.status(200).json({
+            message: "Media deleted",
+            deleted: { _id: doc._id, kind: doc.kind },
+        })
+    } catch (error) {
+        console.error("Delete folder media error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+/** Any kind: raw, final, or selection (admin). */
+export const deleteFolderMedia = (req, res) =>
+    deleteFolderMediaCore(req, res, ["raw", "final", "selection"])
+
+/** Raw upload only. */
+export const deleteFolderRawMedia = (req, res) =>
+    deleteFolderMediaCore(req, res, ["raw"])
+
+/** Final delivery only. */
+export const deleteFolderFinalMedia = (req, res) =>
+    deleteFolderMediaCore(req, res, ["final"])
+
+export const patchSelectionEditStatus = async (req, res) => {
+    try {
+        const { id, mediaId } = req.params
+        const { editStatus } = req.body
+
+        if (
+            !mongoose.Types.ObjectId.isValid(id) ||
+            !mongoose.Types.ObjectId.isValid(mediaId)
+        ) {
+            return res.status(400).json({ message: "Invalid id" })
+        }
+        if (!editStatus || !EDIT_STATUSES.includes(editStatus)) {
+            return res.status(400).json({
+                message: `editStatus must be one of: ${EDIT_STATUSES.join(", ")}`,
+            })
+        }
+
+        const doc = await FolderMedia.findOne({
+            _id: mediaId,
+            folder: id,
+            kind: "selection",
+        }).populate("rawMediaId")
+
+        if (!doc) {
+            return res.status(404).json({ message: "Selection not found" })
+        }
+
+        doc.editStatus = editStatus
+        await doc.save()
+        await doc.populate("rawMediaId")
+
+        return res.status(200).json({
+            message: "Selection updated",
+            selection: serializeSelection(req, doc, {
+                maskNestedRaw: false,
+            }),
+        })
+    } catch (error) {
+        console.error("Patch selection status error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+export const patchFolderStatus = async (req, res) => {
+    try {
+        const { id } = req.params
+        const { status } = req.body
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: "Invalid folder id" })
+        }
+        if (!FOLDER_STATUS_VALUES.includes(status)) {
+            return res.status(400).json({
+                message: `status must be one of: ${FOLDER_STATUS_VALUES.join(", ")}`,
+            })
+        }
+
+        const folder = await Folder.findByIdAndUpdate(
+            id,
+            { status },
+            { new: true }
+        ).populate("client", "name email contact location")
+
+        if (!folder) {
+            return res.status(404).json({ message: "Folder not found" })
+        }
+
+        return res.status(200).json({
+            message: "Folder status updated",
+            folder: {
+                _id: folder._id,
+                status: folder.status,
+            },
+        })
+    } catch (error) {
+        console.error("Patch folder status error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+export const addClientSelection = async (req, res) => {
+    try {
+        const { identifier } = req.params
+        const { rawMediaId } = req.body
+
+        const loaded = await loadActiveSharedFolder(identifier)
+        if (loaded.error) {
+            return res
+                .status(loaded.error.status)
+                .json({ message: loaded.error.message })
+        }
+        const { folder } = loaded
+
+        if (folder.share.selectionLocked) {
+            return res.status(403).json({
+                message:
+                    "Your selection has been submitted and is locked. Contact your photographer if you need changes.",
+            })
+        }
+
+        const settings = await Settings.getSingleton()
+        const shareSelOpts = {
+            maskNestedRaw: Boolean(settings.watermarkPreviewImages),
+        }
+
+        if (!rawMediaId || !mongoose.Types.ObjectId.isValid(rawMediaId)) {
+            return res.status(400).json({ message: "rawMediaId is required" })
+        }
+
+        const raw = await FolderMedia.findOne({
+            _id: rawMediaId,
+            folder: folder._id,
+            kind: "raw",
+        })
+        if (!raw) {
+            return res.status(404).json({ message: "Photo not found in gallery" })
+        }
+
+        const existing = await FolderMedia.findOne({
+            folder: folder._id,
+            kind: "selection",
+            rawMediaId: raw._id,
+        })
+        if (existing) {
+            const populated = await FolderMedia.findById(existing._id).populate(
+                "rawMediaId"
+            )
+            return res.status(200).json({
+                message: "Already selected",
+                selection: serializeSelection(req, populated, shareSelOpts),
+            })
+        }
+
+        const doc = await FolderMedia.create({
+            folder: folder._id,
+            kind: "selection",
+            filePath: "",
+            rawMediaId: raw._id,
+            editStatus: "pending",
+        })
+        await doc.populate("rawMediaId")
+
+        return res.status(201).json({
+            message: "Photo added to your selection",
+            selection: serializeSelection(req, doc, shareSelOpts),
+        })
+    } catch (error) {
+        console.error("Add client selection error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+export const removeClientSelection = async (req, res) => {
+    try {
+        const { identifier, selectionId } = req.params
+
+        const loaded = await loadActiveSharedFolder(identifier)
+        if (loaded.error) {
+            return res
+                .status(loaded.error.status)
+                .json({ message: loaded.error.message })
+        }
+        const { folder } = loaded
+
+        if (folder.share.selectionLocked) {
+            return res.status(403).json({
+                message:
+                    "Your selection has been submitted and is locked. Contact your photographer if you need changes.",
+            })
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(selectionId)) {
+            return res.status(400).json({ message: "Invalid selection id" })
+        }
+
+        const doc = await FolderMedia.findOne({
+            _id: selectionId,
+            folder: folder._id,
+            kind: "selection",
+        })
+        if (!doc) {
+            return res.status(404).json({ message: "Selection not found" })
+        }
+
+        await FolderMedia.deleteOne({ _id: doc._id })
+
+        return res.status(200).json({ message: "Photo removed from your selection" })
+    } catch (error) {
+        console.error("Remove client selection error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+export const syncClientSelections = async (req, res) => {
+    try {
+        const { identifier } = req.params
+        const { rawMediaIds } = req.body || {}
+
+        const loaded = await loadActiveSharedFolder(identifier)
+        if (loaded.error) {
+            return res
+                .status(loaded.error.status)
+                .json({ message: loaded.error.message })
+        }
+        const { folder } = loaded
+
+        if (folder.share.selectionLocked) {
+            return res.status(403).json({
+                message:
+                    "Your selection has been submitted and is locked. Contact your photographer if you need changes.",
+            })
+        }
+
+        if (!Array.isArray(rawMediaIds)) {
+            return res.status(400).json({ message: "rawMediaIds must be an array" })
+        }
+        if (rawMediaIds.length > 500) {
+            return res.status(400).json({ message: "Too many ids (max 500)" })
+        }
+
+        const normalized = rawMediaIds.map(String)
+        for (const id of normalized) {
+            if (!mongoose.Types.ObjectId.isValid(id)) {
+                return res.status(400).json({ message: `Invalid rawMediaId: ${id}` })
+            }
+        }
+        const uniqueIds = [...new Set(normalized)]
+
+        const raws = await FolderMedia.find({
+            _id: { $in: uniqueIds },
+            folder: folder._id,
+            kind: "raw",
+        })
+        if (raws.length !== uniqueIds.length) {
+            return res.status(400).json({
+                message: "One or more photos are not in this gallery",
+            })
+        }
+
+        const want = new Set(uniqueIds.map(String))
+        const existingSelections = await FolderMedia.find({
+            folder: folder._id,
+            kind: "selection",
+        })
+
+        for (const sel of existingSelections) {
+            if (!want.has(String(sel.rawMediaId))) {
+                await FolderMedia.deleteOne({ _id: sel._id })
+            }
+        }
+
+        const have = new Set(
+            existingSelections.map((s) => String(s.rawMediaId))
+        )
+        for (const rid of uniqueIds) {
+            if (!have.has(String(rid))) {
+                await FolderMedia.create({
+                    folder: folder._id,
+                    kind: "selection",
+                    filePath: "",
+                    rawMediaId: rid,
+                    editStatus: "pending",
+                })
+            }
+        }
+
+        const settings = await Settings.getSingleton()
+        const media = await getFolderMediaCollections(req, folder._id, {
+            clientGallery: Boolean(settings.watermarkPreviewImages),
+        })
+
+        return res.status(200).json({
+            message: "Selections updated",
+            count: media.selection.length,
+            selection: media.selection,
+        })
+    } catch (error) {
+        console.error("Sync client selections error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+export const submitClientSelections = async (req, res) => {
+    try {
+        const { identifier } = req.params
+
+        const loaded = await loadActiveSharedFolder(identifier)
+        if (loaded.error) {
+            return res
+                .status(loaded.error.status)
+                .json({ message: loaded.error.message })
+        }
+        const { folder } = loaded
+
+        if (folder.share.selectionLocked) {
+            return res.status(200).json({
+                message: "Selection was already submitted",
+                selectionSubmittedAt: folder.share.selectionSubmittedAt,
+                selectionLocked: true,
+            })
+        }
+
+        folder.share.selectionSubmittedAt = new Date()
+        folder.share.selectionLocked = true
+        await folder.save()
+
+        return res.status(200).json({
+            message: "Selection submitted. Your photographer has been notified (when notifications are wired).",
+            selectionSubmittedAt: folder.share.selectionSubmittedAt,
+            selectionLocked: folder.share.selectionLocked,
+        })
+    } catch (error) {
+        console.error("Submit client selections error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+export const downloadSharedFinal = async (req, res) => {
+    try {
+        const { identifier, mediaId } = req.params
+
+        const loaded = await loadActiveSharedFolder(identifier)
+        if (loaded.error) {
+            return res
+                .status(loaded.error.status)
+                .json({ message: loaded.error.message })
+        }
+        const { folder } = loaded
+
+        if (!mongoose.Types.ObjectId.isValid(mediaId)) {
+            return res.status(400).json({ message: "Invalid file id" })
+        }
+
+        const finalDoc = await FolderMedia.findOne({
+            _id: mediaId,
+            folder: folder._id,
+            kind: "final",
+        })
+        if (!finalDoc?.filePath) {
+            return res.status(404).json({ message: "File not found" })
+        }
+
+        const absPath = path.resolve(process.cwd(), finalDoc.filePath)
+        if (!fs.existsSync(absPath)) {
+            return res.status(404).json({ message: "File missing on server" })
+        }
+
+        const downloadName =
+            finalDoc.originalFilename || path.basename(finalDoc.filePath) || "download"
+
+        return res.download(absPath, downloadName, (err) => {
+            if (err && !res.headersSent) {
+                console.error("Download shared final error:", err)
+                res.status(500).json({ message: "Download failed" })
+            }
+        })
+    } catch (error) {
+        console.error("Download shared final error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+export const deleteAllMediaForFolder = async (folderId) => {
+    const docs = await FolderMedia.find({ folder: folderId })
+    for (const doc of docs) {
+        if (doc.kind === "raw" || doc.kind === "final") {
+            removeFileIfExists(doc.filePath)
+            if (doc.kind === "raw") removeFileIfExists(doc.displayFilePath)
+        }
+    }
+    await FolderMedia.deleteMany({ folder: folderId })
+}

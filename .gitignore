@@ -1,0 +1,9 @@
+node_modules
+.env
+uploads/covers/*
+uploads/settings/*
+!uploads/covers/.gitkeep
+!uploads/settings/.gitkeep
+uploads/folders/**
+!uploads/folders/.gitkeep
+.DS_Store
