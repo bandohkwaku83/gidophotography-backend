@@ -763,6 +763,21 @@
 					}
 				},
 				{
+					"name": "Delete all raw photos (admin)",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/media/raw",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "media", "raw"]
+						},
+						"description": "Deletes every raw upload in the folder (each original plus *-wm.jpg preview if present). Returns 400 if any client selection rows exist; clear selections first."
+					}
+				},
+				{
 					"name": "Upload final delivery (admin)",
 					"event": [
 						{
@@ -814,6 +829,21 @@
 							"path": ["api", "folders", "{{folderId}}", "media", "final", "{{finalMediaId}}"]
 						},
 						"description": "Deletes one final image by id. Set {{finalMediaId}} from GET folder → finals[]."
+					}
+				},
+				{
+					"name": "Delete all final deliveries (admin)",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/media/final",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "media", "final"]
+						},
+						"description": "Deletes every final delivery file in the folder."
 					}
 				},
 				{

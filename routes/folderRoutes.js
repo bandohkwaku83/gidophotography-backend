@@ -17,6 +17,8 @@ import {
     deleteFolderMedia,
     deleteFolderRawMedia,
     deleteFolderFinalMedia,
+    deleteAllFolderRawMedia,
+    deleteAllFolderFinalMedia,
     patchSelectionEditStatus,
     patchFolderStatus,
 } from "../controllers/folderMediaController.js"
@@ -37,6 +39,8 @@ router.get("/share-link-expiry-presets", listShareLinkExpiryPresets)
 
 router.post("/:id/media/raw", uploadFolderRaw, uploadRawMedia)
 router.post("/:id/media/final", uploadFolderFinal, uploadFinalMedia)
+router.delete("/:id/media/raw", deleteAllFolderRawMedia)
+router.delete("/:id/media/final", deleteAllFolderFinalMedia)
 router.delete("/:id/media/raw/:mediaId", deleteFolderRawMedia)
 router.delete("/:id/media/final/:mediaId", deleteFolderFinalMedia)
 router.delete("/:id/media/:mediaId", deleteFolderMedia)

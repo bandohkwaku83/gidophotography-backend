@@ -404,6 +404,77 @@ export const deleteFolderRawMedia = (req, res) =>
 export const deleteFolderFinalMedia = (req, res) =>
     deleteFolderMediaCore(req, res, ["final"])
 
+/** Delete every raw upload in the folder (original + preview files). Blocked if any client selections exist. */
+export const deleteAllFolderRawMedia = async (req, res) => {
+    try {
+        const { id } = req.params
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: "Invalid folder id" })
+        }
+
+        const folder = await Folder.findById(id)
+        if (!folder) {
+            return res.status(404).json({ message: "Folder not found" })
+        }
+
+        const selectionCount = await FolderMedia.countDocuments({
+            folder: id,
+            kind: "selection",
+        })
+        if (selectionCount > 0) {
+            return res.status(400).json({
+                message:
+                    "Cannot delete all raw uploads while the gallery has client selections. Remove selections first, then retry.",
+                selectionCount,
+            })
+        }
+
+        const raws = await FolderMedia.find({ folder: id, kind: "raw" })
+        for (const doc of raws) {
+            await deleteStoredAsset(doc.filePath)
+            await deleteStoredAsset(doc.displayFilePath)
+        }
+        const result = await FolderMedia.deleteMany({ folder: id, kind: "raw" })
+
+        return res.status(200).json({
+            message: "All raw uploads deleted",
+            deletedCount: result.deletedCount,
+        })
+    } catch (error) {
+        console.error("Delete all raw media error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+/** Delete every final delivery file in the folder. */
+export const deleteAllFolderFinalMedia = async (req, res) => {
+    try {
+        const { id } = req.params
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: "Invalid folder id" })
+        }
+
+        const folder = await Folder.findById(id)
+        if (!folder) {
+            return res.status(404).json({ message: "Folder not found" })
+        }
+
+        const finals = await FolderMedia.find({ folder: id, kind: "final" })
+        for (const doc of finals) {
+            await deleteStoredAsset(doc.filePath)
+        }
+        const result = await FolderMedia.deleteMany({ folder: id, kind: "final" })
+
+        return res.status(200).json({
+            message: "All final uploads deleted",
+            deletedCount: result.deletedCount,
+        })
+    } catch (error) {
+        console.error("Delete all final media error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
 export const patchSelectionEditStatus = async (req, res) => {
     try {
         const { id, mediaId } = req.params
