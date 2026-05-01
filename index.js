@@ -13,6 +13,7 @@ import dashboardRoutes from "./routes/dashboardRoutes.js"
 import smsRoutes from "./routes/smsRoutes.js"
 import { mongoUrlFromEnv } from "./utils/mongoUrlFromEnv.js"
 import { buildCorsMiddleware } from "./utils/corsMiddleware.js"
+import { isObjectStorageS3 } from "./services/objectStorage.js"
 
 // Explicit path so .env is loaded even if cwd differs; override beats empty shell exports
 const envPath = path.join(process.cwd(), ".env")
@@ -115,6 +116,15 @@ mongoose
     .connect(MONGO_URL)
     .then(() => {
         console.log("Connected to MongoDB")
+        if (isObjectStorageS3()) {
+            console.log(
+                `[storage] S3: bucket=${process.env.S3_BUCKET} region=${process.env.AWS_REGION}`
+            )
+        } else {
+            console.log(
+                "[storage] Local disk (./uploads). For S3 set STORAGE_DRIVER=s3, S3_BUCKET, AWS_REGION."
+            )
+        }
         app.listen(PORT, () => {
             console.log(`Server is running on port ${PORT}`)
         })

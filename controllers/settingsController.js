@@ -1,25 +1,16 @@
-import fs from "fs"
 import path from "path"
 import Settings from "../models/Settings.js"
-
-const buildPublicUrl = (req, filePath) => {
-    if (!filePath) return ""
-    const normalized = filePath.replace(/\\/g, "/")
-    return `${req.protocol}://${req.get("host")}/${normalized}`
-}
-
-const removeFileIfExists = (filePath) => {
-    if (filePath && fs.existsSync(filePath)) {
-        try {
-            fs.unlinkSync(filePath)
-        } catch (_) {}
-    }
-}
+import { buildPublicAssetUrl } from "../utils/assetUrl.js"
+import {
+    deleteStoredAsset,
+    uploadLocalFileThenRemove,
+    isObjectStorageS3,
+} from "../services/objectStorage.js"
 
 const serializeSettings = (req, settings) => ({
     _id: settings._id,
     defaultCoverImage: settings.defaultCoverImage,
-    defaultCoverImageUrl: buildPublicUrl(req, settings.defaultCoverImage),
+    defaultCoverImageUrl: buildPublicAssetUrl(req, settings.defaultCoverImage),
     watermarkPreviewImages: settings.watermarkPreviewImages,
     updatedAt: settings.updatedAt,
 })
@@ -49,12 +40,22 @@ export const updateSettings = async (req, res) => {
         const settings = await Settings.getSingleton()
 
         if (req.file) {
-            removeFileIfExists(settings.defaultCoverImage)
-            settings.defaultCoverImage = path.posix.join(
+            if (settings.defaultCoverImage) {
+                await deleteStoredAsset(settings.defaultCoverImage)
+            }
+            const newPath = path.posix.join(
                 "uploads",
                 "settings",
                 path.basename(req.file.path)
             )
+            if (isObjectStorageS3()) {
+                await uploadLocalFileThenRemove(
+                    req.file.path,
+                    newPath,
+                    req.file.mimetype
+                )
+            }
+            settings.defaultCoverImage = newPath
         }
 
         if (req.body && req.body.watermarkPreviewImages !== undefined) {
@@ -78,7 +79,9 @@ export const resetSettings = async (req, res) => {
     try {
         const settings = await Settings.getSingleton()
 
-        removeFileIfExists(settings.defaultCoverImage)
+        if (settings.defaultCoverImage) {
+            await deleteStoredAsset(settings.defaultCoverImage)
+        }
         settings.defaultCoverImage = ""
         settings.watermarkPreviewImages = false
 

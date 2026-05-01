@@ -1,4 +1,3 @@
-import fs from "fs"
 import path from "path"
 import crypto from "crypto"
 import mongoose from "mongoose"
@@ -17,6 +16,13 @@ import {
 } from "../utils/shareLinkExpiry.js"
 import { FOLDER_STATUS_VALUES } from "../constants/folderStatus.js"
 import { buildGalleryShareUrl } from "../utils/shareUrl.js"
+import { buildPublicAssetUrl } from "../utils/assetUrl.js"
+import {
+    isObjectStorageS3,
+    uploadLocalFileThenRemove,
+    deleteStoredAsset,
+    unlinkLocalTempFile,
+} from "../services/objectStorage.js"
 
 const SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/
 
@@ -29,12 +35,6 @@ const generateShareCode = async () => {
     throw new Error("Could not generate unique share code")
 }
 
-const buildPublicUrl = (req, filePath) => {
-    if (!filePath) return ""
-    const normalized = filePath.replace(/\\/g, "/")
-    return `${req.protocol}://${req.get("host")}/${normalized}`
-}
-
 const serializeFolder = (req, folder) => {
     const obj = folder.toObject ? folder.toObject() : folder
     const exp = obj.share?.expiresAt ? new Date(obj.share.expiresAt) : null
@@ -42,21 +42,15 @@ const serializeFolder = (req, folder) => {
     return {
         ...obj,
         status: obj.status || "draft",
-        coverImageUrl: buildPublicUrl(req, obj.coverImage),
+        coverImageUrl: buildPublicAssetUrl(req, obj.coverImage),
         shareUrl: buildGalleryShareUrl(folder),
         shareExpired,
     }
 }
 
-const removeFileIfExists = (filePath) => {
-    if (filePath && fs.existsSync(filePath)) {
-        try {
-            fs.unlinkSync(filePath)
-        } catch (_) {}
-    }
-}
-
 export const createFolder = async (req, res) => {
+    let coverImage = ""
+    let uploadedCoverToS3 = false
     try {
         const {
             client,
@@ -69,24 +63,23 @@ export const createFolder = async (req, res) => {
         } = req.body
 
         if (!client || !eventName || !eventDate) {
-            if (req.file) removeFileIfExists(req.file.path)
+            if (req.file) unlinkLocalTempFile(req.file.path)
             return res.status(400).json({
                 message: "Client, event name and event date are required",
             })
         }
 
         if (!mongoose.Types.ObjectId.isValid(client)) {
-            if (req.file) removeFileIfExists(req.file.path)
+            if (req.file) unlinkLocalTempFile(req.file.path)
             return res.status(400).json({ message: "Invalid client id" })
         }
 
         const clientDoc = await Client.findById(client)
         if (!clientDoc) {
-            if (req.file) removeFileIfExists(req.file.path)
+            if (req.file) unlinkLocalTempFile(req.file.path)
             return res.status(404).json({ message: "Client not found" })
         }
 
-        let coverImage = ""
         let usingDefaultCover = false
 
         if (req.file) {
@@ -119,13 +112,23 @@ export const createFolder = async (req, res) => {
         if (hasShareExpiryInput({ linkExpiry, expiresAt })) {
             const r = resolveShareExpiryInput({ linkExpiry, expiresAt })
             if (r.error) {
-                if (req.file) removeFileIfExists(req.file.path)
+                if (req.file) unlinkLocalTempFile(req.file.path)
                 return res.status(400).json({ message: r.error })
             }
             if (!r.unchanged) {
                 share.expiresAt = r.expiresAt
                 share.linkExpiryPreset = r.preset
             }
+        }
+
+        let uploadedCoverToS3 = false
+        if (req.file && isObjectStorageS3()) {
+            await uploadLocalFileThenRemove(
+                req.file.path,
+                coverImage,
+                req.file.mimetype
+            )
+            uploadedCoverToS3 = true
         }
 
         const folder = await Folder.create({
@@ -146,7 +149,11 @@ export const createFolder = async (req, res) => {
             folder: serializeFolder(req, populated),
         })
     } catch (error) {
-        if (req.file) removeFileIfExists(req.file.path)
+        if (uploadedCoverToS3 && coverImage) {
+            await deleteStoredAsset(coverImage).catch(() => {})
+        } else if (req.file) {
+            unlinkLocalTempFile(req.file.path)
+        }
         console.error("Create folder error:", error)
         return res.status(500).json({ message: "Server error" })
     }
@@ -217,24 +224,24 @@ export const updateFolder = async (req, res) => {
             req.body
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
-            if (req.file) removeFileIfExists(req.file.path)
+            if (req.file) unlinkLocalTempFile(req.file.path)
             return res.status(400).json({ message: "Invalid folder id" })
         }
 
         const folder = await Folder.findById(id)
         if (!folder) {
-            if (req.file) removeFileIfExists(req.file.path)
+            if (req.file) unlinkLocalTempFile(req.file.path)
             return res.status(404).json({ message: "Folder not found" })
         }
 
         if (client !== undefined) {
             if (!mongoose.Types.ObjectId.isValid(client)) {
-                if (req.file) removeFileIfExists(req.file.path)
+                if (req.file) unlinkLocalTempFile(req.file.path)
                 return res.status(400).json({ message: "Invalid client id" })
             }
             const clientDoc = await Client.findById(client)
             if (!clientDoc) {
-                if (req.file) removeFileIfExists(req.file.path)
+                if (req.file) unlinkLocalTempFile(req.file.path)
                 return res.status(404).json({ message: "Client not found" })
             }
             folder.client = client
@@ -242,7 +249,7 @@ export const updateFolder = async (req, res) => {
 
         if (eventName !== undefined) {
             if (!eventName || !eventName.trim()) {
-                if (req.file) removeFileIfExists(req.file.path)
+                if (req.file) unlinkLocalTempFile(req.file.path)
                 return res
                     .status(400)
                     .json({ message: "Event name cannot be empty" })
@@ -255,7 +262,7 @@ export const updateFolder = async (req, res) => {
 
         if (status !== undefined) {
             if (!FOLDER_STATUS_VALUES.includes(status)) {
-                if (req.file) removeFileIfExists(req.file.path)
+                if (req.file) unlinkLocalTempFile(req.file.path)
                 return res.status(400).json({
                     message: `status must be one of: ${FOLDER_STATUS_VALUES.join(", ")}`,
                 })
@@ -264,12 +271,22 @@ export const updateFolder = async (req, res) => {
         }
 
         if (req.file) {
-            if (!folder.usingDefaultCover) removeFileIfExists(folder.coverImage)
-            folder.coverImage = path.posix.join(
+            const newCoverPath = path.posix.join(
                 "uploads",
                 "covers",
                 path.basename(req.file.path)
             )
+            if (isObjectStorageS3()) {
+                await uploadLocalFileThenRemove(
+                    req.file.path,
+                    newCoverPath,
+                    req.file.mimetype
+                )
+            }
+            if (!folder.usingDefaultCover) {
+                await deleteStoredAsset(folder.coverImage)
+            }
+            folder.coverImage = newCoverPath
             folder.usingDefaultCover = false
         } else if (
             useDefaultCover === true ||
@@ -283,7 +300,8 @@ export const updateFolder = async (req, res) => {
                         "No default cover image is set in settings. Upload one first.",
                 })
             }
-            if (!folder.usingDefaultCover) removeFileIfExists(folder.coverImage)
+            if (!folder.usingDefaultCover)
+                await deleteStoredAsset(folder.coverImage)
             folder.coverImage = settings.defaultCoverImage
             folder.usingDefaultCover = true
         }
@@ -299,7 +317,7 @@ export const updateFolder = async (req, res) => {
             folder: serializeFolder(req, populated),
         })
     } catch (error) {
-        if (req.file) removeFileIfExists(req.file.path)
+        if (req.file) unlinkLocalTempFile(req.file.path)
         console.error("Update folder error:", error)
         return res.status(500).json({ message: "Server error" })
     }
@@ -608,7 +626,7 @@ export const getSharedFolder = async (req, res) => {
                 eventDate: obj.eventDate,
                 description: obj.description,
                 coverImage: obj.coverImage,
-                coverImageUrl: buildPublicUrl(req, obj.coverImage),
+                coverImageUrl: buildPublicAssetUrl(req, obj.coverImage),
                 share: {
                     slug: obj.share.slug,
                     code: obj.share.code,
@@ -651,7 +669,7 @@ export const deleteFolder = async (req, res) => {
         await deleteAllMediaForFolder(folder._id)
 
         if (!folder.usingDefaultCover) {
-            removeFileIfExists(folder.coverImage)
+        if (!folder.usingDefaultCover) await deleteStoredAsset(folder.coverImage)
         }
 
         await Folder.deleteOne({ _id: folder._id })

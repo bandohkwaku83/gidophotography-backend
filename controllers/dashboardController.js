@@ -1,6 +1,6 @@
 import Client from "../models/Client.js"
 import Folder from "../models/Folder.js"
-import { buildPublicUrl } from "./folderMediaController.js"
+import { buildPublicAssetUrl } from "../utils/assetUrl.js"
 import { normalizeFolderStatus } from "../constants/folderStatus.js"
 
 const parseLimit = (raw, fallback, { min = 1, max = 50 } = {}) => {
@@ -42,7 +42,7 @@ export const getDashboard = async (req, res) => {
             id: f._id,
             title: f.eventName,
             clientName: f.client?.name?.trim() || "Unknown client",
-            coverImageUrl: buildPublicUrl(req, f.coverImage),
+            coverImageUrl: buildPublicAssetUrl(req, f.coverImage),
             status: normalizeFolderStatus(f.status),
             updatedAt: f.updatedAt,
             createdAt: f.createdAt,

@@ -15,20 +15,17 @@ import {
     generateRawDisplayAsset,
     buildWatermarkedDisplayPaths,
 } from "../utils/rawDisplayWatermark.js"
+import { buildPublicAssetUrl } from "../utils/assetUrl.js"
+import {
+    isObjectStorageS3,
+    uploadLocalFileThenRemove,
+    deleteStoredAsset,
+    unlinkLocalTempFile,
+    getObjectStreamForStoredPath,
+    resolveLocalAbsolutePath,
+} from "../services/objectStorage.js"
 
-export const buildPublicUrl = (req, filePath) => {
-    if (!filePath) return ""
-    const normalized = String(filePath).replace(/\\/g, "/")
-    return `${req.protocol}://${req.get("host")}/${normalized}`
-}
-
-const removeFileIfExists = (filePath) => {
-    if (filePath && fs.existsSync(filePath)) {
-        try {
-            fs.unlinkSync(filePath)
-        } catch (_) {}
-    }
-}
+export const buildPublicUrl = buildPublicAssetUrl
 
 export const serializeRawUpload = (req, doc, opts = {}) => {
     const { maskOriginalWithDisplay = false } = opts
@@ -134,8 +131,13 @@ export const getFolderMediaCollections = async (
 
 const rollbackCreatedMedia = async (created) => {
     for (const { doc, diskPath, displayDiskPath } of created) {
-        removeFileIfExists(diskPath)
-        removeFileIfExists(displayDiskPath)
+        if (isObjectStorageS3()) {
+            await deleteStoredAsset(doc.filePath)
+            if (doc.displayFilePath) await deleteStoredAsset(doc.displayFilePath)
+        } else {
+            unlinkLocalTempFile(diskPath)
+            unlinkLocalTempFile(displayDiskPath)
+        }
         await FolderMedia.deleteOne({ _id: doc._id }).catch(() => {})
     }
 }
@@ -146,7 +148,7 @@ export const uploadRawMedia = async (req, res) => {
     try {
         const { id } = req.params
         if (!mongoose.Types.ObjectId.isValid(id)) {
-            for (const f of fileParts) removeFileIfExists(f.path)
+            for (const f of fileParts) unlinkLocalTempFile(f.path)
             return res.status(400).json({ message: "Invalid folder id" })
         }
         if (fileParts.length === 0) {
@@ -158,7 +160,7 @@ export const uploadRawMedia = async (req, res) => {
 
         const folder = await Folder.findById(id)
         if (!folder) {
-            for (const f of fileParts) removeFileIfExists(f.path)
+            for (const f of fileParts) unlinkLocalTempFile(f.path)
             return res.status(404).json({ message: "Folder not found" })
         }
 
@@ -206,6 +208,17 @@ export const uploadRawMedia = async (req, res) => {
                     )
                 }
             }
+
+            if (isObjectStorageS3()) {
+                await uploadLocalFileThenRemove(f.path, doc.filePath, doc.mimeType)
+                if (doc.displayFilePath && row.displayDiskPath) {
+                    await uploadLocalFileThenRemove(
+                        row.displayDiskPath,
+                        doc.displayFilePath,
+                        "image/jpeg"
+                    )
+                }
+            }
         }
 
         const notifySms = readUploadCompleteNotify(req)
@@ -223,7 +236,7 @@ export const uploadRawMedia = async (req, res) => {
         })
     } catch (error) {
         await rollbackCreatedMedia(created)
-        for (const f of fileParts) removeFileIfExists(f.path)
+        for (const f of fileParts) unlinkLocalTempFile(f.path)
         console.error("Upload raw media error:", error)
         return res.status(500).json({ message: "Server error" })
     }
@@ -244,7 +257,7 @@ export const uploadFinalMedia = async (req, res) => {
             : null
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
-            for (const f of fileParts) removeFileIfExists(f.path)
+            for (const f of fileParts) unlinkLocalTempFile(f.path)
             return res.status(400).json({ message: "Invalid folder id" })
         }
         if (fileParts.length === 0) {
@@ -256,14 +269,14 @@ export const uploadFinalMedia = async (req, res) => {
 
         const folder = await Folder.findById(id)
         if (!folder) {
-            for (const f of fileParts) removeFileIfExists(f.path)
+            for (const f of fileParts) unlinkLocalTempFile(f.path)
             return res.status(404).json({ message: "Folder not found" })
         }
 
         let selectionRef = null
         if (selectionMediaId) {
             if (fileParts.length > 1) {
-                for (const f of fileParts) removeFileIfExists(f.path)
+                for (const f of fileParts) unlinkLocalTempFile(f.path)
                 return res.status(400).json({
                     message:
                         "selectionMediaId can only be used when uploading one final at a time. Omit it for batch uploads, then link manually if needed.",
@@ -275,7 +288,7 @@ export const uploadFinalMedia = async (req, res) => {
                 kind: "selection",
             })
             if (!sel) {
-                for (const f of fileParts) removeFileIfExists(f.path)
+                for (const f of fileParts) unlinkLocalTempFile(f.path)
                 return res.status(404).json({ message: "Selection not found" })
             }
             selectionRef = sel._id
@@ -299,6 +312,9 @@ export const uploadFinalMedia = async (req, res) => {
                 selectionMediaId: selectionRef,
             })
             created.push({ doc, diskPath: f.path })
+            if (isObjectStorageS3()) {
+                await uploadLocalFileThenRemove(f.path, filePath, doc.mimeType)
+            }
         }
 
         const notifySms = readUploadCompleteNotify(req)
@@ -314,7 +330,7 @@ export const uploadFinalMedia = async (req, res) => {
         })
     } catch (error) {
         await rollbackCreatedMedia(created)
-        for (const f of fileParts) removeFileIfExists(f.path)
+        for (const f of fileParts) unlinkLocalTempFile(f.path)
         console.error("Upload final media error:", error)
         return res.status(500).json({ message: "Server error" })
     }
@@ -356,10 +372,10 @@ const deleteFolderMediaCore = async (req, res, allowedKinds) => {
                         "Cannot delete this photo because the client has selected it. Remove selections first.",
                 })
             }
-            removeFileIfExists(doc.filePath)
-            removeFileIfExists(doc.displayFilePath)
+            await deleteStoredAsset(doc.filePath)
+            await deleteStoredAsset(doc.displayFilePath)
         } else if (doc.kind === "final") {
-            removeFileIfExists(doc.filePath)
+            await deleteStoredAsset(doc.filePath)
         } else if (doc.kind === "selection") {
             // no file on disk
         }
@@ -730,13 +746,40 @@ export const downloadSharedFinal = async (req, res) => {
             return res.status(404).json({ message: "File not found" })
         }
 
-        const absPath = path.resolve(process.cwd(), finalDoc.filePath)
+        const downloadName =
+            finalDoc.originalFilename ||
+            path.basename(finalDoc.filePath) ||
+            "download"
+
+        if (isObjectStorageS3()) {
+            try {
+                const out = await getObjectStreamForStoredPath(finalDoc.filePath)
+                if (!out?.Body) {
+                    return res.status(404).json({ message: "File missing in storage" })
+                }
+                res.setHeader(
+                    "Content-Type",
+                    finalDoc.mimeType || "application/octet-stream"
+                )
+                res.setHeader(
+                    "Content-Disposition",
+                    `attachment; filename*=UTF-8''${encodeURIComponent(downloadName)}`
+                )
+                if (out.ContentLength != null) {
+                    res.setHeader("Content-Length", String(out.ContentLength))
+                }
+                out.Body.pipe(res)
+                return
+            } catch (e) {
+                console.error("S3 download error:", e)
+                return res.status(404).json({ message: "File not found in storage" })
+            }
+        }
+
+        const absPath = resolveLocalAbsolutePath(finalDoc.filePath)
         if (!fs.existsSync(absPath)) {
             return res.status(404).json({ message: "File missing on server" })
         }
-
-        const downloadName =
-            finalDoc.originalFilename || path.basename(finalDoc.filePath) || "download"
 
         return res.download(absPath, downloadName, (err) => {
             if (err && !res.headersSent) {
@@ -754,8 +797,8 @@ export const deleteAllMediaForFolder = async (folderId) => {
     const docs = await FolderMedia.find({ folder: folderId })
     for (const doc of docs) {
         if (doc.kind === "raw" || doc.kind === "final") {
-            removeFileIfExists(doc.filePath)
-            if (doc.kind === "raw") removeFileIfExists(doc.displayFilePath)
+            await deleteStoredAsset(doc.filePath)
+            if (doc.kind === "raw") await deleteStoredAsset(doc.displayFilePath)
         }
     }
     await FolderMedia.deleteMany({ folder: folderId })
