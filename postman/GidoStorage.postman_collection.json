@@ -207,6 +207,45 @@
 			]
 		},
 		{
+			"name": "Usage",
+			"item": [
+				{
+					"name": "Usage summary",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/usage/summary",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "usage", "summary"]
+						},
+						"description": "Aggregated storage (bytes) and by_category percentages for raws, selections, finals. Based on FolderMedia.size."
+					}
+				},
+				{
+					"name": "Usage by gallery",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/usage/galleries?sort_by=total_size&order=desc",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "usage", "galleries"],
+							"query": [
+								{ "key": "sort_by", "value": "total_size" },
+								{ "key": "order", "value": "desc" }
+							]
+						},
+						"description": "Per-folder usage with client name. Query: sort_by=total_size|name, order=asc|desc. Defaults: total_size + desc; name + asc."
+					}
+				}
+			]
+		},
+		{
 			"name": "SMS",
 			"item": [
 				{

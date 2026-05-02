@@ -10,6 +10,7 @@ import folderRoutes from "./routes/folderRoutes.js"
 import settingsRoutes from "./routes/settingsRoutes.js"
 import shareRoutes from "./routes/shareRoutes.js"
 import dashboardRoutes from "./routes/dashboardRoutes.js"
+import usageRoutes from "./routes/usageRoutes.js"
 import smsRoutes from "./routes/smsRoutes.js"
 import { mongoUrlFromEnv } from "./utils/mongoUrlFromEnv.js"
 import { buildCorsMiddleware } from "./utils/corsMiddleware.js"
@@ -36,6 +37,7 @@ app.use("/api/folders", folderRoutes)
 app.use("/api/settings", settingsRoutes)
 app.use("/api/share", shareRoutes)
 app.use("/api/dashboard", dashboardRoutes)
+app.use("/api/usage", usageRoutes)
 app.use("/api/sms", smsRoutes)
 
 app.use((err, req, res, next) => {
