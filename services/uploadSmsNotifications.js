@@ -9,6 +9,7 @@ import SmsMessage from "../models/SmsMessage.js"
 import { sendArkeselSms } from "./arkeselSms.js"
 import { normalizeGhanaMsisdn, formatPhoneDisplay } from "../utils/phoneGh.js"
 import { replaceSmsPlaceholders } from "../utils/smsPlaceholders.js"
+import { buildGalleryShareUrl } from "../utils/shareUrl.js"
 import { parseSmsCostPerMessage } from "../utils/smsCost.js"
 import { applySmsBranding } from "../utils/smsBranding.js"
 
@@ -34,10 +35,10 @@ function envFlag(key, defaultTrue = true) {
     return true
 }
 
-/** Unset → split (two SMS) to reduce Arkesel “spam word” rejects when URL + bank data are combined. */
+/** Unset → one SMS (studio default copy). Set SMS_FINAL_UNPAID_SPLIT_SEND=true to send link in a follow-up text if your gateway blocks long messages. */
 function envSplitFinalUnpaidSms() {
     const v = process.env.SMS_FINAL_UNPAID_SPLIT_SEND
-    if (v === undefined || v === null || String(v).trim() === "") return true
+    if (v === undefined || v === null || String(v).trim() === "") return false
     const s = String(v).toLowerCase().trim()
     if (["false", "0", "no", "off"].includes(s)) return false
     return true
@@ -55,6 +56,7 @@ async function sendFolderClientSms({
     template,
     userId,
     trigger,
+    applyBranding = true,
 }) {
     const msisdn = normalizeGhanaMsisdn(client.contact)
     if (!msisdn) {
@@ -71,13 +73,18 @@ async function sendFolderClientSms({
 
     if (!rendered.trim()) return
 
-    const branded = applySmsBranding(rendered)
+    const branded = applyBranding ? applySmsBranding(rendered) : rendered
     if (!branded.trim()) return
 
     const arkesel = await sendArkeselSms({
         recipients: [msisdn],
         message: branded,
     })
+
+    if (!arkesel.ok) {
+        const preview = branded.slice(0, 280).replace(/\n/g, "\\n")
+        console.warn(`[SMS ${trigger}] Arkesel: ${arkesel.error || "failed"} | ${preview}`)
+    }
 
     const costPer = parseSmsCostPerMessage()
     await SmsMessage.create({
@@ -139,32 +146,72 @@ const DEFAULT_FINAL_TEMPLATE_NO_LINK =
     "Hi {{client_name}}, your final photos are ready. We'll share your gallery link when it's available."
 
 /**
- * Default pay-info text avoids patterns gateways often flag as spam (USSD *…*,
- * labels like "Account No", dense 13-digit strings, ALL CAPS "PAYMENT").
- * Override with SMS_FINAL_UNPAID_PAYMENT_BLOCK. If Arkesel still blocks, set
- * SMS_FINAL_UNPAID_SPLIT_SEND=true (default) so link and pay lines are separate SMS.
+ * Gallery URL for SMS: Arkesel often flags `https://` + money text in one message.
+ * Default strips the scheme (many phones still open the host path).
+ * SMS_FINAL_UNPAID_URL_FORMAT: noscheme (default) | full | none
  */
-const DEFAULT_FINAL_UNPAID_PAYMENT_BLOCK = `024 792 8392 (Kojo Ennin) mobile money
-GCB Dome — GIDOPHOTOGRAPHY — acct 1321 4400 00684
-Weddings and Vows POS — ask studio for dial code`
+function galleryLinkForUnpaidSms(folder) {
+    const raw = buildGalleryShareUrl(folder)
+    if (!raw) return ""
+    const mode = (process.env.SMS_FINAL_UNPAID_URL_FORMAT || "noscheme")
+        .trim()
+        .toLowerCase()
+    if (mode === "none" || mode === "off") return ""
+    if (mode === "full") return raw
+    return raw.replace(/^https?:\/\//i, "").trim()
+}
 
-const DEFAULT_FINAL_UNPAID_TEMPLATE = `Hi {{client_name}}, your finals are ready. Due: {{outstanding_amount}} GHS.
+/**
+ * Default payment options (override with SMS_FINAL_UNPAID_PAYMENT_BLOCK).
+ * USSD uses *713*2830# (standard dial string).
+ */
+const DEFAULT_FINAL_UNPAID_PAYMENT_BLOCK = `• Mobile Money: 024 792 8392 (Kojo Ennin)
+• Bank (GCB – Dome Branch): 1321440000684
+Account Name: GIDOPHOTOGRAPHY
+• USSD: Dial *713*2830# and select "Weddings and Vows"`
+
+const DEFAULT_FINAL_UNPAID_TEMPLATE = `Hi, this is GIDOPHOTOGRAPHY.
+
+You have an outstanding balance of {{outstanding_amount}} GHS for your photoshoot.
+
+You can complete your payment using any of the options below:
 
 {{payment_block}}
 
-Preview: {{gallery_link}}`
+Thank you.
 
-/** Part 1 when split send: balance + gallery only (no bank digits in same SMS as URL). */
-const DEFAULT_FINAL_UNPAID_PART1 = `Hi {{client_name}}, your finals are ready. Due: {{outstanding_amount}} GHS.
+{{gallery_link}}`
 
-Preview: {{gallery_link}}`
+/** When split: payment message first (no URL), then gallery link only. */
+const DEFAULT_FINAL_UNPAID_PART1 = `Hi, this is GIDOPHOTOGRAPHY.
+
+You have an outstanding balance of {{outstanding_amount}} GHS for your photoshoot.
+
+You can complete your payment using any of the options below:
+
+{{payment_block}}
+
+Thank you.`
+
+/** When split: link only (second SMS). */
+const DEFAULT_FINAL_UNPAID_PART2 = `{{gallery_link}}`
 
 function replaceUnpaidSmsPlaceholders(template, ctx) {
     const { amountStr, paymentBlock, clientName, folder } = ctx
     let t = String(template)
     t = t.replace(/\{\{\s*outstanding_amount\s*\}\}/gi, amountStr)
     t = t.replace(/\{\{\s*payment_block\s*\}\}/gi, paymentBlock)
-    return replaceSmsPlaceholders(t, { clientName, folder })
+    let galleryLinkOverride
+    if (Object.prototype.hasOwnProperty.call(ctx, "galleryLinkForSms")) {
+        galleryLinkOverride = ctx.galleryLinkForSms
+    } else {
+        galleryLinkOverride = galleryLinkForUnpaidSms(folder)
+    }
+    return replaceSmsPlaceholders(t, {
+        clientName,
+        folder,
+        galleryLinkOverride,
+    })
 }
 
 async function runFinalUploadSmsInternal(folder, userId) {
@@ -217,6 +264,7 @@ async function runFinalUnpaidUploadSms(folder, userId) {
             paymentBlock: "",
             clientName: client.name,
             folder,
+            galleryLinkForSms: galleryLinkForUnpaidSms(folder),
         })
         await sendFolderClientSms({
             folder,
@@ -224,10 +272,21 @@ async function runFinalUnpaidUploadSms(folder, userId) {
             template: rendered1,
             userId,
             trigger: "final_delivery_unpaid",
+            applyBranding: false,
         })
 
+        const part2Tpl =
+            process.env.SMS_NOTIFY_FINAL_UNPAID_PART2?.trim() ||
+            DEFAULT_FINAL_UNPAID_PART2
+        const rendered2 = replaceUnpaidSmsPlaceholders(part2Tpl, {
+            amountStr,
+            paymentBlock,
+            clientName: client.name,
+            folder,
+            galleryLinkForSms: galleryLinkForUnpaidSms(folder),
+        })
         const suffix = process.env.SMS_FINAL_UNPAID_PART2_SUFFIX?.trim() || ""
-        const part2Core = [paymentBlock, suffix].filter(Boolean).join("\n").trim()
+        const part2Core = [rendered2, suffix].filter(Boolean).join("\n\n").trim()
         if (part2Core) {
             await new Promise((r) => setTimeout(r, parseFinalUnpaidSplitDelayMs()))
             await sendFolderClientSms({
@@ -236,6 +295,7 @@ async function runFinalUnpaidUploadSms(folder, userId) {
                 template: part2Core,
                 userId,
                 trigger: "final_delivery_unpaid",
+                applyBranding: false,
             })
         }
         return
@@ -249,6 +309,7 @@ async function runFinalUnpaidUploadSms(folder, userId) {
         paymentBlock,
         clientName: client.name,
         folder,
+        galleryLinkForSms: galleryLinkForUnpaidSms(folder),
     })
 
     await sendFolderClientSms({
@@ -257,6 +318,7 @@ async function runFinalUnpaidUploadSms(folder, userId) {
         template: rendered,
         userId,
         trigger: "final_delivery_unpaid",
+        applyBranding: false,
     })
 }
 

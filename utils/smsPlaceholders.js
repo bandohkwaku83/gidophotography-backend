@@ -33,13 +33,19 @@ function formatEventDate(dateVal) {
 
 /**
  * @param {string} template
- * @param {{ clientName?: string, folder?: object|null }} ctx
+ * @param {{ clientName?: string, folder?: object|null, galleryLinkOverride?: string }} ctx
+ *        galleryLinkOverride — when set, used instead of buildGalleryShareUrl(folder) for {{gallery_link}}
  */
 export function replaceSmsPlaceholders(template, ctx = {}) {
     const clientName = ctx.clientName ?? ""
     const folder = ctx.folder
     const eventDate = folder ? formatEventDate(folder.eventDate) : ""
-    const galleryLink = folder ? buildGalleryShareUrl(folder) : ""
+    let galleryLink = ""
+    if (ctx.galleryLinkOverride !== undefined && ctx.galleryLinkOverride !== null) {
+        galleryLink = String(ctx.galleryLinkOverride)
+    } else if (folder) {
+        galleryLink = buildGalleryShareUrl(folder)
+    }
 
     return String(template).replace(TOKEN_PATTERN, (_, key) => {
         if (key === "client_name") return clientName
