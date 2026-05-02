@@ -30,6 +30,19 @@ const folderSchema = new mongoose.Schema(
             type: Boolean,
             default: false,
         },
+        /** 0–100; maps to object-position % for custom covers */
+        coverFocalX: {
+            type: Number,
+            default: 50,
+            min: 0,
+            max: 100,
+        },
+        coverFocalY: {
+            type: Number,
+            default: 50,
+            min: 0,
+            max: 100,
+        },
         createdBy: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "User",

@@ -26,6 +26,33 @@ import {
 
 const SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/
 
+function pickCoverFocalRaw(body, axis) {
+    const keys =
+        axis === "x"
+            ? ["coverFocalX", "cover_focal_x"]
+            : ["coverFocalY", "cover_focal_y"]
+    for (const k of keys) {
+        if (Object.prototype.hasOwnProperty.call(body, k)) return body[k]
+    }
+    return undefined
+}
+
+/** Omitted field → `undefined`; invalid → `null`; valid → clamped 0–100 */
+function parseCoverFocalPercent(raw) {
+    if (raw === undefined || raw === null || raw === "") return undefined
+    const n =
+        typeof raw === "number" && Number.isFinite(raw)
+            ? raw
+            : Number.parseFloat(String(raw).trim(), 10)
+    if (!Number.isFinite(n)) return null
+    return Math.min(100, Math.max(0, n))
+}
+
+function normalizeStoredFocal(n, fallback = 50) {
+    if (n != null && Number.isFinite(n)) return n
+    return fallback
+}
+
 const generateShareCode = async () => {
     for (let i = 0; i < 5; i++) {
         const code = crypto.randomBytes(4).toString("hex")
@@ -39,12 +66,18 @@ const serializeFolder = (req, folder) => {
     const obj = folder.toObject ? folder.toObject() : folder
     const exp = obj.share?.expiresAt ? new Date(obj.share.expiresAt) : null
     const shareExpired = !!(exp && exp < new Date())
+    const focalX = normalizeStoredFocal(obj.coverFocalX)
+    const focalY = normalizeStoredFocal(obj.coverFocalY)
     return {
         ...obj,
         status: obj.status || "draft",
         coverImageUrl: buildPublicAssetUrl(req, obj.coverImage),
         shareUrl: buildGalleryShareUrl(folder),
         shareExpired,
+        coverFocalX: focalX,
+        coverFocalY: focalY,
+        cover_focal_x: focalX,
+        cover_focal_y: focalY,
     }
 }
 
@@ -121,7 +154,31 @@ export const createFolder = async (req, res) => {
             }
         }
 
-        let uploadedCoverToS3 = false
+        const rawFx = pickCoverFocalRaw(req.body, "x")
+        const rawFy = pickCoverFocalRaw(req.body, "y")
+        let coverFocalX = 50
+        let coverFocalY = 50
+        if (rawFx !== undefined) {
+            const p = parseCoverFocalPercent(rawFx)
+            if (p === null) {
+                if (req.file) unlinkLocalTempFile(req.file.path)
+                return res.status(400).json({
+                    message: "coverFocalX must be a number from 0 to 100",
+                })
+            }
+            coverFocalX = p
+        }
+        if (rawFy !== undefined) {
+            const p = parseCoverFocalPercent(rawFy)
+            if (p === null) {
+                if (req.file) unlinkLocalTempFile(req.file.path)
+                return res.status(400).json({
+                    message: "coverFocalY must be a number from 0 to 100",
+                })
+            }
+            coverFocalY = p
+        }
+
         if (req.file && isObjectStorageS3()) {
             await uploadLocalFileThenRemove(
                 req.file.path,
@@ -138,6 +195,8 @@ export const createFolder = async (req, res) => {
             description: description ? description.trim() : "",
             coverImage,
             usingDefaultCover,
+            coverFocalX,
+            coverFocalY,
             createdBy: req.user?._id,
             share,
         })
@@ -220,8 +279,14 @@ export const getFolder = async (req, res) => {
 export const updateFolder = async (req, res) => {
     try {
         const { id } = req.params
-        const { client, eventName, eventDate, description, useDefaultCover, status } =
-            req.body
+        const {
+            client,
+            eventName,
+            eventDate,
+            description,
+            useDefaultCover,
+            status,
+        } = req.body
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
             if (req.file) unlinkLocalTempFile(req.file.path)
@@ -304,6 +369,29 @@ export const updateFolder = async (req, res) => {
                 await deleteStoredAsset(folder.coverImage)
             folder.coverImage = settings.defaultCoverImage
             folder.usingDefaultCover = true
+        }
+
+        const rawFx = pickCoverFocalRaw(req.body, "x")
+        const rawFy = pickCoverFocalRaw(req.body, "y")
+        if (rawFx !== undefined) {
+            const p = parseCoverFocalPercent(rawFx)
+            if (p === null) {
+                if (req.file) unlinkLocalTempFile(req.file.path)
+                return res.status(400).json({
+                    message: "coverFocalX must be a number from 0 to 100",
+                })
+            }
+            folder.coverFocalX = p
+        }
+        if (rawFy !== undefined) {
+            const p = parseCoverFocalPercent(rawFy)
+            if (p === null) {
+                if (req.file) unlinkLocalTempFile(req.file.path)
+                return res.status(400).json({
+                    message: "coverFocalY must be a number from 0 to 100",
+                })
+            }
+            folder.coverFocalY = p
         }
 
         await folder.save()
@@ -617,6 +705,8 @@ export const getSharedFolder = async (req, res) => {
         const finals = media.finals.map((f) =>
             serializePublicFinal(req, identifier, f)
         )
+        const focalX = normalizeStoredFocal(obj.coverFocalX)
+        const focalY = normalizeStoredFocal(obj.coverFocalY)
 
         return res.status(200).json({
             folder: {
@@ -627,6 +717,10 @@ export const getSharedFolder = async (req, res) => {
                 description: obj.description,
                 coverImage: obj.coverImage,
                 coverImageUrl: buildPublicAssetUrl(req, obj.coverImage),
+                coverFocalX: focalX,
+                coverFocalY: focalY,
+                cover_focal_x: focalX,
+                cover_focal_y: focalY,
                 share: {
                     slug: obj.share.slug,
                     code: obj.share.code,
@@ -669,7 +763,7 @@ export const deleteFolder = async (req, res) => {
         await deleteAllMediaForFolder(folder._id)
 
         if (!folder.usingDefaultCover) {
-        if (!folder.usingDefaultCover) await deleteStoredAsset(folder.coverImage)
+            await deleteStoredAsset(folder.coverImage)
         }
 
         await Folder.deleteOne({ _id: folder._id })
