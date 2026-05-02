@@ -527,7 +527,7 @@ export const uploadFinalMedia = async (req, res) => {
                     for (const f of fileParts) unlinkLocalTempFile(f.path)
                     return res.status(400).json({
                         message:
-                            "When the client has not paid (clientHasPaidForFinals=false), amountRemainingGHS is required as a positive number.",
+                            "When the client has not paid, send a positive amount using one of these multipart fields: amountRemainingGHS, amountRemaining, outstandingAmountGHS, balance, or amount. You can also send a JSON object in the finalDelivery field. Strip currency symbols or use a plain number (e.g. 500 or 500.50).",
                     })
                 }
                 await Folder.updateOne(

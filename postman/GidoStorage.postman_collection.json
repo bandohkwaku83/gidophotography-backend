@@ -883,7 +883,7 @@
 								{ "key": "selectionMediaId", "value": "{{selectionMediaId}}", "type": "text", "description": "Optional, single-file uploads only. Link this final to a client selection _id." },
 								{ "key": "uploadComplete", "value": "", "type": "text", "description": "Optional. Omit = SMS after this batch (default). false = skip SMS for this batch (use on intermediate batches)." },
 								{ "key": "clientHasPaidForFinals", "value": "true", "type": "text", "description": "Final delivery flow: true = client paid (clears lock & outstanding). false = unpaid: require amountRemainingGHS (positive); optional lockImagesBeforeUpload true to block downloads and serve watermarked locked-preview URLs on the share gallery. Omit all three payment fields for legacy uploads (no change to folder.finalDelivery)." },
-								{ "key": "amountRemainingGHS", "value": "", "type": "text", "description": "Required when clientHasPaidForFinals=false. Positive number (e.g. 500)." },
+								{ "key": "amountRemainingGHS", "value": "", "type": "text", "description": "Required when clientHasPaidForFinals=false. Positive number. Aliases also accepted: amountRemaining, outstandingAmountGHS, balance, amount; or nest keys inside a JSON string in field finalDelivery." },
 								{ "key": "lockImagesBeforeUpload", "value": "false", "type": "text", "description": "When unpaid: true enables payment lock (no downloadUrl; finals[].url points at GET .../locked-preview watermarked JPEG). false = client can still download while balance is tracked." }
 							]
 						},
