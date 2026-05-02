@@ -1,7 +1,7 @@
 {
 	"info": {
 		"name": "GidoStorage Backend",
-		"description": "Auth, clients, folders, dashboard, settings, share (public), SMS (Arkesel). Unpaid final SMS default: Hi {{client_name}}, photos ready + remaining {{outstanding_amount}} GHS + {{gallery_link}} + MoMo line + signed GidoPhotography/weddings and vows (no SMS branding on unpaid). SMS_FINAL_UNPAID_SPLIT_SEND=true splits before gallery link. SMS_NOTIFY_FINAL_UNPAID_TEMPLATE / SMS_FINAL_UNPAID_PAYMENT_BLOCK override. Final upload: clientHasPaidForFinals, amountRemainingGHS, lockImagesBeforeUpload; PATCH .../final-delivery/unlock. Raw watermarking when settings.watermarkPreviewImages is true.",
+		"description": "Auth, clients, bookings (calendar), folders, dashboard, settings, share (public), SMS (Arkesel). Bookings: GET /api/bookings/meta, summary/week, list ?year=&month=, CRUD /api/bookings. Unpaid final SMS defaults, final-delivery upload fields, PATCH .../final-delivery/unlock. Raw watermarking when settings.watermarkPreviewImages is true.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
@@ -17,6 +17,11 @@
 		},
 		{
 			"key": "clientId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "bookingId",
 			"value": "",
 			"type": "string"
 		},
@@ -408,6 +413,146 @@
 							"raw": "{{baseUrl}}/api/clients/{{clientId}}",
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "clients", "{{clientId}}"]
+						}
+					}
+				}
+			]
+		},
+		{
+			"name": "Bookings",
+			"item": [
+				{
+					"name": "Booking meta (shoot types + legend)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/bookings/meta",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "bookings", "meta"]
+						},
+						"description": "Returns shootTypes[] { id, label, color } for filters and calendar dots."
+					}
+				},
+				{
+					"name": "Bookings this week (count)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/bookings/summary/week",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "bookings", "summary", "week"]
+						},
+						"description": "Sunday–Saturday in server local time: bookedCount, weekStartsAt, weekEndsAt."
+					}
+				},
+				{
+					"name": "List bookings (month or range)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/bookings?year=2026&month=5&type=",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "bookings"],
+							"query": [
+								{ "key": "year", "value": "2026", "description": "Use with month for calendar grid." },
+								{ "key": "month", "value": "5", "description": "1–12" },
+								{ "key": "type", "value": "", "description": "Optional: Wedding | Portraits | Outdoor | Birthday | Graduation | Commercial | Other" },
+								{ "key": "from", "value": "", "description": "Alternative: ISO range with to= (omit year/month)." },
+								{ "key": "to", "value": "", "description": "ISO end date/time." }
+							]
+						},
+						"description": "bookings[] sorted by startsAt; each includes color for UI. Or ?from=&to= instead of year/month."
+					}
+				},
+				{
+					"name": "Create booking",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    const d = pm.response.json();",
+									"    if (d.booking && d.booking._id) {",
+									"        pm.collectionVariables.set('bookingId', d.booking._id);",
+									"    }",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"title\": \"Styled editorial\",\n    \"clientId\": \"{{clientId}}\",\n    \"date\": \"2026-05-29\",\n    \"shootType\": \"Other\",\n    \"start\": \"09:00 AM\",\n    \"end\": \"\",\n    \"location\": \"Downtown loft\",\n    \"description\": \"Magazine pitch\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/bookings",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "bookings"]
+						},
+						"description": "clientId required (Mongo id from GET /api/clients). No phone field — contact is on booking.client.contact when populated. date: YYYY-MM-DD or DD/MM/YYYY. start/end: HH:mm or h:mm AM/PM, or startsAt/endsAt ISO."
+					}
+				},
+				{
+					"name": "Get one booking",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/bookings/{{bookingId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "bookings", "{{bookingId}}"]
+						}
+					}
+				},
+				{
+					"name": "Update booking",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"title\": \"Styled editorial (updated)\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/bookings/{{bookingId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "bookings", "{{bookingId}}"]
+						}
+					}
+				},
+				{
+					"name": "Delete booking",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/bookings/{{bookingId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "bookings", "{{bookingId}}"]
 						}
 					}
 				}
