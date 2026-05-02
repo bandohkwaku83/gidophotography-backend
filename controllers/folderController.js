@@ -721,6 +721,7 @@ export const getSharedFolder = async (req, res) => {
                 coverFocalY: focalY,
                 cover_focal_x: focalX,
                 cover_focal_y: focalY,
+                selectionSubmitted: Boolean(obj.share?.selectionSubmittedAt),
                 share: {
                     slug: obj.share.slug,
                     code: obj.share.code,

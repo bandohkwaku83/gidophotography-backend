@@ -571,7 +571,7 @@ export const addClientSelection = async (req, res) => {
         if (folder.share.selectionLocked) {
             return res.status(403).json({
                 message:
-                    "Your selection has been submitted and is locked. Contact your photographer if you need changes.",
+                    "This gallery is locked by your photographer. Contact them if you need changes.",
             })
         }
 
@@ -642,7 +642,7 @@ export const removeClientSelection = async (req, res) => {
         if (folder.share.selectionLocked) {
             return res.status(403).json({
                 message:
-                    "Your selection has been submitted and is locked. Contact your photographer if you need changes.",
+                    "This gallery is locked by your photographer. Contact them if you need changes.",
             })
         }
 
@@ -684,7 +684,7 @@ export const syncClientSelections = async (req, res) => {
         if (folder.share.selectionLocked) {
             return res.status(403).json({
                 message:
-                    "Your selection has been submitted and is locked. Contact your photographer if you need changes.",
+                    "This gallery is locked by your photographer. Contact them if you need changes.",
             })
         }
 
@@ -770,21 +770,25 @@ export const submitClientSelections = async (req, res) => {
         const { folder } = loaded
 
         if (folder.share.selectionLocked) {
-            return res.status(200).json({
-                message: "Selection was already submitted",
+            return res.status(403).json({
+                message:
+                    "This gallery is locked by your photographer. Contact them to unlock or submit.",
                 selectionSubmittedAt: folder.share.selectionSubmittedAt,
                 selectionLocked: true,
+                canEditSelections: false,
             })
         }
 
         folder.share.selectionSubmittedAt = new Date()
-        folder.share.selectionLocked = true
         await folder.save()
 
         return res.status(200).json({
-            message: "Selection submitted. Your photographer has been notified (when notifications are wired).",
+            message:
+                "Selection submitted. Your photographer has been notified (when notifications are wired). You can change your picks and submit again anytime.",
             selectionSubmittedAt: folder.share.selectionSubmittedAt,
-            selectionLocked: folder.share.selectionLocked,
+            selectionLocked: Boolean(folder.share.selectionLocked),
+            canEditSelections: true,
+            selectionSubmitted: true,
         })
     } catch (error) {
         console.error("Submit client selections error:", error)
