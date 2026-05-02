@@ -34,6 +34,21 @@ function envFlag(key, defaultTrue = true) {
     return true
 }
 
+/** Unset → split (two SMS) to reduce Arkesel “spam word” rejects when URL + bank data are combined. */
+function envSplitFinalUnpaidSms() {
+    const v = process.env.SMS_FINAL_UNPAID_SPLIT_SEND
+    if (v === undefined || v === null || String(v).trim() === "") return true
+    const s = String(v).toLowerCase().trim()
+    if (["false", "0", "no", "off"].includes(s)) return false
+    return true
+}
+
+function parseFinalUnpaidSplitDelayMs() {
+    const n = parseInt(process.env.SMS_FINAL_UNPAID_SPLIT_DELAY_MS || "1200", 10)
+    if (!Number.isFinite(n)) return 1200
+    return Math.min(Math.max(n, 400), 15000)
+}
+
 async function sendFolderClientSms({
     folder,
     client,
@@ -123,23 +138,26 @@ const DEFAULT_FINAL_TEMPLATE_WITH_LINK =
 const DEFAULT_FINAL_TEMPLATE_NO_LINK =
     "Hi {{client_name}}, your final photos are ready. We'll share your gallery link when it's available."
 
-const DEFAULT_FINAL_UNPAID_PAYMENT_BLOCK = `Account Name: GIDOPHOTOGRAPHY
-Account No: 1321440000684
-Branch Name: DOME
-Bank: GCB
+/**
+ * Default pay-info text avoids patterns gateways often flag as spam (USSD *…*,
+ * labels like "Account No", dense 13-digit strings, ALL CAPS "PAYMENT").
+ * Override with SMS_FINAL_UNPAID_PAYMENT_BLOCK. If Arkesel still blocks, set
+ * SMS_FINAL_UNPAID_SPLIT_SEND=true (default) so link and pay lines are separate SMS.
+ */
+const DEFAULT_FINAL_UNPAID_PAYMENT_BLOCK = `024 792 8392 (Kojo Ennin) mobile money
+GCB Dome — GIDOPHOTOGRAPHY — acct 1321 4400 00684
+Weddings and Vows POS — ask studio for dial code`
 
-MoMo: 0247928392
-Name: Kojo Ennin
+const DEFAULT_FINAL_UNPAID_TEMPLATE = `Hi {{client_name}}, your finals are ready. Due: {{outstanding_amount}} GHS.
 
-POS: *713*2830#
-Weddings and Vows`
-
-const DEFAULT_FINAL_UNPAID_TEMPLATE = `Hi {{client_name}}, you have an outstanding balance of GH₵{{outstanding_amount}} on your final delivery.
-
-PAYMENT (please use one option):
 {{payment_block}}
 
-View your gallery (locked until payment is complete): {{gallery_link}}`
+Preview: {{gallery_link}}`
+
+/** Part 1 when split send: balance + gallery only (no bank digits in same SMS as URL). */
+const DEFAULT_FINAL_UNPAID_PART1 = `Hi {{client_name}}, your finals are ready. Due: {{outstanding_amount}} GHS.
+
+Preview: {{gallery_link}}`
 
 function replaceUnpaidSmsPlaceholders(template, ctx) {
     const { amountStr, paymentBlock, clientName, folder } = ctx
@@ -187,6 +205,41 @@ async function runFinalUnpaidUploadSms(folder, userId) {
     const paymentBlock =
         process.env.SMS_FINAL_UNPAID_PAYMENT_BLOCK?.trim() ||
         DEFAULT_FINAL_UNPAID_PAYMENT_BLOCK
+
+    const split = envSplitFinalUnpaidSms()
+
+    if (split) {
+        const part1Tpl =
+            process.env.SMS_NOTIFY_FINAL_UNPAID_PART1?.trim() ||
+            DEFAULT_FINAL_UNPAID_PART1
+        const rendered1 = replaceUnpaidSmsPlaceholders(part1Tpl, {
+            amountStr,
+            paymentBlock: "",
+            clientName: client.name,
+            folder,
+        })
+        await sendFolderClientSms({
+            folder,
+            client,
+            template: rendered1,
+            userId,
+            trigger: "final_delivery_unpaid",
+        })
+
+        const suffix = process.env.SMS_FINAL_UNPAID_PART2_SUFFIX?.trim() || ""
+        const part2Core = [paymentBlock, suffix].filter(Boolean).join("\n").trim()
+        if (part2Core) {
+            await new Promise((r) => setTimeout(r, parseFinalUnpaidSplitDelayMs()))
+            await sendFolderClientSms({
+                folder,
+                client,
+                template: part2Core,
+                userId,
+                trigger: "final_delivery_unpaid",
+            })
+        }
+        return
+    }
 
     const envTpl = process.env.SMS_NOTIFY_FINAL_UNPAID_TEMPLATE?.trim()
     const template = envTpl || DEFAULT_FINAL_UNPAID_TEMPLATE
