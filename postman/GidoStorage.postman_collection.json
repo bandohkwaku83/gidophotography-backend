@@ -1,7 +1,7 @@
 {
 	"info": {
 		"name": "GidoStorage Backend",
-		"description": "Auth, clients, folders (client SMS after raw/final only when multipart uploadComplete=true on the last batch), dashboard, settings, share (public), and SMS (Arkesel). When settings.watermarkPreviewImages is true, each raw image upload also generates a watermarked JPEG (displayUrl on admin GET folder; public share responses use that URL as uploads[].url / selection[].raw.url when a display file exists). Optional server env: WATERMARK_PREVIEW_TEXT.",
+		"description": "Auth, clients, folders (client SMS after raw/final only when multipart uploadComplete=true on the last batch), dashboard, settings, share (public), and SMS (Arkesel). Final delivery: optional multipart `clientHasPaidForFinals`, `amountRemainingGHS`, `lockImagesBeforeUpload`; unpaid + positive balance sends `final_delivery_unpaid` SMS (payment block + gallery link). Lock blocks client downloads and serves watermarked `locked-preview` URLs only. Admin: PATCH .../final-delivery/unlock. When settings.watermarkPreviewImages is true, each raw image upload also generates a watermarked JPEG (displayUrl on admin GET folder; public share responses use that URL as uploads[].url / selection[].raw.url when a display file exists). Optional server env: WATERMARK_PREVIEW_TEXT.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
@@ -301,7 +301,7 @@
 								{ "key": "status", "value": "", "description": "Optional: sent | failed | pending" }
 							]
 						},
-						"description": "Paginated log for the Recent Messages UI (recipient, message, length, status, costGHS, timestamps). Each document includes trigger: manual | raw_upload | final_upload (manual is POST /api/sms/send; raw_upload / final_upload are automatic after successful upload batches)."
+						"description": "Paginated log for the Recent Messages UI (recipient, message, length, status, costGHS, timestamps). Each document includes trigger: manual | raw_upload | final_upload | final_delivery_unpaid (manual is POST /api/sms/send; upload triggers are automatic after successful batches when SMS is enabled)."
 					}
 				}
 			]
@@ -733,6 +733,21 @@
 					}
 				},
 				{
+					"name": "Unlock final delivery (admin)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/final-delivery/unlock",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "final-delivery", "unlock"]
+						},
+						"description": "After payment is confirmed: clears finalDelivery.imagesLocked and outstandingAmountGHS so the client can download full finals from the share gallery (GET .../download). Response includes updated folder with finalDelivery."
+					}
+				},
+				{
 					"name": "Get one folder",
 					"request": {
 						"method": "GET",
@@ -866,7 +881,10 @@
 								{ "key": "files", "type": "file", "src": [], "description": "One or many finals (same field rules as raw). Omit selectionMediaId when uploading multiple." },
 								{ "key": "duplicateAction", "value": "ignore", "type": "text", "description": "From duplicate popup: replace overwrites same-named finals; ignore skips." },
 								{ "key": "selectionMediaId", "value": "{{selectionMediaId}}", "type": "text", "description": "Optional, single-file uploads only. Link this final to a client selection _id." },
-								{ "key": "uploadComplete", "value": "", "type": "text", "description": "Optional. Omit = SMS after this batch (default). false = skip SMS for this batch (use on intermediate batches)." }
+								{ "key": "uploadComplete", "value": "", "type": "text", "description": "Optional. Omit = SMS after this batch (default). false = skip SMS for this batch (use on intermediate batches)." },
+								{ "key": "clientHasPaidForFinals", "value": "true", "type": "text", "description": "Final delivery flow: true = client paid (clears lock & outstanding). false = unpaid: require amountRemainingGHS (positive); optional lockImagesBeforeUpload true to block downloads and serve watermarked locked-preview URLs on the share gallery. Omit all three payment fields for legacy uploads (no change to folder.finalDelivery)." },
+								{ "key": "amountRemainingGHS", "value": "", "type": "text", "description": "Required when clientHasPaidForFinals=false. Positive number (e.g. 500)." },
+								{ "key": "lockImagesBeforeUpload", "value": "false", "type": "text", "description": "When unpaid: true enables payment lock (no downloadUrl; finals[].url points at GET .../locked-preview watermarked JPEG). false = client can still download while balance is tracked." }
 							]
 						},
 						"url": {
@@ -874,7 +892,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "folders", "{{folderId}}", "media", "final"]
 						},
-						"description": "selectionMediaId only when uploading exactly one file. Popup UX: duplicate-preview first; then duplicateAction from modal. Response includes createdCount, replacedCount, ignoredDuplicates*. Final SMS debounced. uploadComplete=false on intermediate batches. smsNotifyScheduled."
+						"description": "selectionMediaId only when uploading exactly one file. Popup UX: duplicate-preview first; then duplicateAction from modal. Response includes createdCount, replacedCount, ignoredDuplicates*, finalDelivery. Final SMS debounced: if folder has outstandingAmountGHS > 0 after this batch, SMS uses unpaid template (payment details + gallery link). uploadComplete=false on intermediate batches. smsNotifyScheduled."
 					}
 				},
 				{
@@ -1012,7 +1030,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "share", "{{shareIdentifier}}"]
 						},
-						"description": "Client gallery bootstrap: uploads, selection, finals with downloadUrl each, counts, canEditSelections, share.selectionLocked / selectionSubmittedAt. When server watermarkPreviewImages is true and a preview file exists, uploads[].url and selection[].raw.url point at the watermarked JPEG (not the original); otherwise url is the original file."
+						"description": "Client gallery bootstrap: uploads, selection, finals, counts, canEditSelections, share.selectionLocked / selectionSubmittedAt, finalDelivery { outstandingAmountGHS, imagesLocked }, rightsProtection. When finalDelivery.imagesLocked is true, finals[].url is GET .../locked-preview (watermarked JPEG), finals[].locked is true, and downloadUrl is omitted; GET .../download returns 403. When unlocked, each final includes downloadUrl. When watermarkPreviewImages is true and a raw preview exists, uploads[].url and selection[].raw.url use the watermarked JPEG."
 					}
 				},
 				{
@@ -1097,6 +1115,20 @@
 							"path": ["api", "share", "{{shareIdentifier}}", "selections", "submit"]
 						},
 						"description": "Locks further pick changes until photographer unlocks via PATCH /folders/:id/share."
+					}
+				},
+				{
+					"name": "Client locked final preview (PUBLIC)",
+					"request": {
+						"auth": { "type": "noauth" },
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/share/{{shareIdentifier}}/finals/{{finalMediaId}}/locked-preview",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "share", "{{shareIdentifier}}", "finals", "{{finalMediaId}}", "locked-preview"]
+						},
+						"description": "When the folder is payment-locked, finals[].url points here: returns a downscaled watermarked JPEG (not the original). Returns 404 when the gallery is not locked. Use as <img src> only."
 					}
 				},
 				{

@@ -5,11 +5,16 @@ import {
     removeClientSelection,
     syncClientSelections,
     submitClientSelections,
+    streamSharedFinalLockedPreview,
     downloadSharedFinal,
 } from "../controllers/folderMediaController.js"
 
 const router = express.Router()
 
+router.get(
+    "/:identifier/finals/:mediaId/locked-preview",
+    streamSharedFinalLockedPreview
+)
 router.get(
     "/:identifier/finals/:mediaId/download",
     downloadSharedFinal

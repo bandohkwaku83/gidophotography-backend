@@ -26,8 +26,14 @@ import {
     deleteStoredAsset,
     unlinkLocalTempFile,
     getObjectStreamForStoredPath,
+    readStoredAssetBufferLimited,
     resolveLocalAbsolutePath,
 } from "../services/objectStorage.js"
+import { readFinalDeliveryPaymentFromReq } from "../utils/finalDeliveryMultipart.js"
+import {
+    pipeLockedFinalJpegToResponse,
+    isRasterImageMime,
+} from "../utils/finalLockedPreview.js"
 
 export const buildPublicUrl = buildPublicAssetUrl
 
@@ -79,14 +85,27 @@ export const serializeFinal = (req, doc) => ({
     createdAt: doc.createdAt,
 })
 
-/** Adds `downloadUrl` for client gallery (authenticated only by share link). */
-export const serializePublicFinal = (req, identifier, f) => {
+/** @param {{ imagesLocked?: boolean }} opts */
+export const serializePublicFinal = (req, identifier, f, opts = {}) => {
     const ident = encodeURIComponent(String(identifier))
+    const host = `${req.protocol}://${req.get("host")}`
+    if (opts.imagesLocked) {
+        return {
+            ...f,
+            url: `${host}/api/share/${ident}/finals/${f._id}/locked-preview`,
+            locked: true,
+            rightsNote:
+                "Payment lock: downloads are disabled and only watermarked previews are available. True screenshot prevention is not possible over HTTP; the gallery app should add UX mitigations (e.g. overlays, blur, user education).",
+        }
+    }
     return {
         ...f,
-        downloadUrl: `${req.protocol}://${req.get("host")}/api/share/${ident}/finals/${f._id}/download`,
+        downloadUrl: `${host}/api/share/${ident}/finals/${f._id}/download`,
     }
 }
+
+export const folderFinalImagesLocked = (folder) =>
+    Boolean(folder?.finalDelivery?.imagesLocked)
 
 const loadActiveSharedFolder = async (identifier) => {
     const folder = await Folder.findOne({
@@ -495,10 +514,43 @@ export const uploadFinalMedia = async (req, res) => {
             })
         }
 
-        const folder = await Folder.findById(id)
+        let folder = await Folder.findById(id)
         if (!folder) {
             for (const f of fileParts) unlinkLocalTempFile(f.path)
             return res.status(404).json({ message: "Folder not found" })
+        }
+
+        const pay = readFinalDeliveryPaymentFromReq(req)
+        if (!pay.legacy) {
+            if (!pay.clientPaid) {
+                if (pay.amountRemaining == null) {
+                    for (const f of fileParts) unlinkLocalTempFile(f.path)
+                    return res.status(400).json({
+                        message:
+                            "When the client has not paid (clientHasPaidForFinals=false), amountRemainingGHS is required as a positive number.",
+                    })
+                }
+                await Folder.updateOne(
+                    { _id: folder._id },
+                    {
+                        $set: {
+                            "finalDelivery.outstandingAmountGHS": pay.amountRemaining,
+                            "finalDelivery.imagesLocked": pay.lockImages,
+                        },
+                    }
+                )
+            } else {
+                await Folder.updateOne(
+                    { _id: folder._id },
+                    {
+                        $set: {
+                            "finalDelivery.outstandingAmountGHS": null,
+                            "finalDelivery.imagesLocked": false,
+                        },
+                    }
+                )
+            }
+            folder = await Folder.findById(id)
         }
 
         const dupAction = readDuplicateAction(req)
@@ -614,6 +666,10 @@ export const uploadFinalMedia = async (req, res) => {
             ignoredDuplicates,
             replacedMediaIds: replacedDocs.map((d) => d._id),
             smsNotifyScheduled: notifySms,
+            finalDelivery: folder.finalDelivery || {
+                outstandingAmountGHS: null,
+                imagesLocked: false,
+            },
         })
     } catch (error) {
         await rollbackCreatedMedia(created)
@@ -1083,6 +1139,64 @@ export const submitClientSelections = async (req, res) => {
     }
 }
 
+export const streamSharedFinalLockedPreview = async (req, res) => {
+    try {
+        const { identifier, mediaId } = req.params
+
+        const loaded = await loadActiveSharedFolder(identifier)
+        if (loaded.error) {
+            return res
+                .status(loaded.error.status)
+                .json({ message: loaded.error.message })
+        }
+        const { folder } = loaded
+
+        if (!folderFinalImagesLocked(folder)) {
+            return res.status(404).json({ message: "Preview not available" })
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(mediaId)) {
+            return res.status(400).json({ message: "Invalid file id" })
+        }
+
+        const finalDoc = await FolderMedia.findOne({
+            _id: mediaId,
+            folder: folder._id,
+            kind: "final",
+        })
+        if (!finalDoc?.filePath) {
+            return res.status(404).json({ message: "File not found" })
+        }
+
+        if (!isRasterImageMime(finalDoc.mimeType)) {
+            return res.status(415).json({
+                message:
+                    "Locked preview is only available for standard image formats.",
+            })
+        }
+
+        const got = await readStoredAssetBufferLimited(finalDoc.filePath)
+        if (!got.ok) {
+            if (got.error === "too_large") {
+                return res.status(413).json({
+                    message: "File is too large to generate a locked preview.",
+                })
+            }
+            return res.status(404).json({ message: "File not found" })
+        }
+
+        const ok = await pipeLockedFinalJpegToResponse(res, got.buffer)
+        if (!ok && !res.headersSent) {
+            return res.status(422).json({ message: "Could not generate preview" })
+        }
+    } catch (error) {
+        console.error("Locked final preview error:", error)
+        if (!res.headersSent) {
+            return res.status(500).json({ message: "Server error" })
+        }
+    }
+}
+
 export const downloadSharedFinal = async (req, res) => {
     try {
         const { identifier, mediaId } = req.params
@@ -1094,6 +1208,13 @@ export const downloadSharedFinal = async (req, res) => {
                 .json({ message: loaded.error.message })
         }
         const { folder } = loaded
+
+        if (folderFinalImagesLocked(folder)) {
+            return res.status(403).json({
+                message:
+                    "Downloads are disabled until payment is complete. Contact your photographer or complete payment to receive full files.",
+            })
+        }
 
         if (!mongoose.Types.ObjectId.isValid(mediaId)) {
             return res.status(400).json({ message: "Invalid file id" })

@@ -123,11 +123,34 @@ const DEFAULT_FINAL_TEMPLATE_WITH_LINK =
 const DEFAULT_FINAL_TEMPLATE_NO_LINK =
     "Hi {{client_name}}, your final photos are ready. We'll share your gallery link when it's available."
 
-async function runFinalUploadSms(folderId, userId) {
-    if (!envFlag("SMS_NOTIFY_ON_FINAL_UPLOAD", true)) return
+const DEFAULT_FINAL_UNPAID_PAYMENT_BLOCK = `Account Name: GIDOPHOTOGRAPHY
+Account No: 1321440000684
+Branch Name: DOME
+Bank: GCB
 
-    const folder = await Folder.findById(folderId)
-    if (!folder) return
+MoMo: 0247928392
+Name: Kojo Ennin
+
+POS: *713*2830#
+Weddings and Vows`
+
+const DEFAULT_FINAL_UNPAID_TEMPLATE = `Hi {{client_name}}, you have an outstanding balance of GH₵{{outstanding_amount}} on your final delivery.
+
+PAYMENT (please use one option):
+{{payment_block}}
+
+View your gallery (locked until payment is complete): {{gallery_link}}`
+
+function replaceUnpaidSmsPlaceholders(template, ctx) {
+    const { amountStr, paymentBlock, clientName, folder } = ctx
+    let t = String(template)
+    t = t.replace(/\{\{\s*outstanding_amount\s*\}\}/gi, amountStr)
+    t = t.replace(/\{\{\s*payment_block\s*\}\}/gi, paymentBlock)
+    return replaceSmsPlaceholders(t, { clientName, folder })
+}
+
+async function runFinalUploadSmsInternal(folder, userId) {
+    if (!envFlag("SMS_NOTIFY_ON_FINAL_UPLOAD", true)) return
 
     const envFinal = process.env.SMS_NOTIFY_FINAL_TEMPLATE?.trim()
     let template
@@ -149,6 +172,51 @@ async function runFinalUploadSms(folderId, userId) {
         userId,
         trigger: "final_upload",
     })
+}
+
+async function runFinalUnpaidUploadSms(folder, userId) {
+    if (!envFlag("SMS_NOTIFY_ON_FINAL_UPLOAD", true)) return
+
+    const client = await Client.findById(folder.client)
+    if (!client) return
+
+    const amt = folder.finalDelivery?.outstandingAmountGHS
+    const amountStr =
+        amt != null && Number.isFinite(Number(amt)) ? String(amt) : ""
+
+    const paymentBlock =
+        process.env.SMS_FINAL_UNPAID_PAYMENT_BLOCK?.trim() ||
+        DEFAULT_FINAL_UNPAID_PAYMENT_BLOCK
+
+    const envTpl = process.env.SMS_NOTIFY_FINAL_UNPAID_TEMPLATE?.trim()
+    const template = envTpl || DEFAULT_FINAL_UNPAID_TEMPLATE
+
+    const rendered = replaceUnpaidSmsPlaceholders(template, {
+        amountStr,
+        paymentBlock,
+        clientName: client.name,
+        folder,
+    })
+
+    await sendFolderClientSms({
+        folder,
+        client,
+        template: rendered,
+        userId,
+        trigger: "final_delivery_unpaid",
+    })
+}
+
+async function runFinalUploadSmsRouter(folderId, userId) {
+    const folder = await Folder.findById(folderId)
+    if (!folder) return
+
+    const amt = folder.finalDelivery?.outstandingAmountGHS
+    if (amt != null && Number(amt) > 0) {
+        await runFinalUnpaidUploadSms(folder, userId)
+    } else {
+        await runFinalUploadSmsInternal(folder, userId)
+    }
 }
 
 function debounceFolderNotify(timerMap, folderId, userId, runner, label) {
@@ -183,7 +251,7 @@ export function scheduleFinalUploadSms(folderId, userId) {
         finalNotifyTimers,
         folderId,
         userId,
-        runFinalUploadSms,
+        runFinalUploadSmsRouter,
         "final_upload"
     )
 }

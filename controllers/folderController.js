@@ -8,6 +8,7 @@ import {
     getFolderMediaCollections,
     deleteAllMediaForFolder,
     serializePublicFinal,
+    folderFinalImagesLocked,
 } from "./folderMediaController.js"
 import {
     resolveShareExpiryInput,
@@ -673,6 +674,39 @@ export const unshareFolder = async (req, res) => {
     }
 }
 
+export const unlockFinalDelivery = async (req, res) => {
+    try {
+        const { id } = req.params
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: "Invalid folder id" })
+        }
+
+        const folder = await Folder.findByIdAndUpdate(
+            id,
+            {
+                $set: {
+                    "finalDelivery.imagesLocked": false,
+                    "finalDelivery.outstandingAmountGHS": null,
+                },
+            },
+            { new: true }
+        ).populate("client", "name email contact location")
+
+        if (!folder) {
+            return res.status(404).json({ message: "Folder not found" })
+        }
+
+        return res.status(200).json({
+            message:
+                "Final delivery is unlocked. The client may download full-resolution finals from the share gallery.",
+            folder: serializeFolder(req, folder),
+        })
+    } catch (error) {
+        console.error("Unlock final delivery error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
 export const getSharedFolder = async (req, res) => {
     try {
         const { identifier } = req.params
@@ -702,8 +736,9 @@ export const getSharedFolder = async (req, res) => {
             clientGallery: Boolean(settings.watermarkPreviewImages),
         })
         const obj = folder.toObject()
+        const imagesLocked = folderFinalImagesLocked(folder)
         const finals = media.finals.map((f) =>
-            serializePublicFinal(req, identifier, f)
+            serializePublicFinal(req, identifier, f, { imagesLocked })
         )
         const focalX = normalizeStoredFocal(obj.coverFocalX)
         const focalY = normalizeStoredFocal(obj.coverFocalY)
@@ -733,6 +768,16 @@ export const getSharedFolder = async (req, res) => {
                     selectionLocked: Boolean(obj.share.selectionLocked),
                 },
                 canEditSelections: !obj.share.selectionLocked,
+                finalDelivery: {
+                    outstandingAmountGHS:
+                        obj.finalDelivery?.outstandingAmountGHS ?? null,
+                    imagesLocked: Boolean(obj.finalDelivery?.imagesLocked),
+                },
+                rightsProtection: {
+                    finalImagesLocked: Boolean(obj.finalDelivery?.imagesLocked),
+                    screenshotHint:
+                        "Screenshots cannot be prevented by the server; the gallery should use overlays and education. Locked finals use watermarked previews only.",
+                },
                 counts: {
                     uploads: media.uploads.length,
                     selected: media.selection.length,

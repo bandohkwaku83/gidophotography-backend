@@ -126,3 +126,39 @@ export async function getObjectStreamForStoredPath(storedPath) {
     )
     return out
 }
+
+const DEFAULT_MAX_BUFFER_READ_BYTES = 45 * 1024 * 1024
+
+/**
+ * Read a stored object fully into memory with a size cap (e.g. locked final preview).
+ * @returns {{ ok: true, buffer: Buffer } | { ok: false, error: string }}
+ */
+export async function readStoredAssetBufferLimited(
+    storedPath,
+    maxBytes = DEFAULT_MAX_BUFFER_READ_BYTES
+) {
+    const key = objectKeyFromStoredPath(storedPath)
+    if (!key) return { ok: false, error: "missing_path" }
+
+    if (isObjectStorageS3()) {
+        const out = await getObjectStreamForStoredPath(storedPath)
+        if (!out?.Body) return { ok: false, error: "not_found" }
+        const len = out.ContentLength
+        if (len != null && len > maxBytes) return { ok: false, error: "too_large" }
+        const chunks = []
+        let total = 0
+        for await (const chunk of out.Body) {
+            total += chunk.length
+            if (total > maxBytes) return { ok: false, error: "too_large" }
+            chunks.push(chunk)
+        }
+        return { ok: true, buffer: Buffer.concat(chunks) }
+    }
+
+    const abs = resolveLocalAbsolutePath(storedPath)
+    if (!abs || !fs.existsSync(abs)) return { ok: false, error: "not_found" }
+    const stat = await fs.promises.stat(abs)
+    if (stat.size > maxBytes) return { ok: false, error: "too_large" }
+    const buffer = await fs.promises.readFile(abs)
+    return { ok: true, buffer }
+}

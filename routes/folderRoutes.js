@@ -10,6 +10,7 @@ import {
     regenerateShareLink,
     patchFolderShare,
     listShareLinkExpiryPresets,
+    unlockFinalDelivery,
 } from "../controllers/folderController.js"
 import {
     uploadRawMedia,
@@ -53,6 +54,7 @@ router.post("/:id/share/regenerate", regenerateShareLink)
 router.patch("/:id/share", patchFolderShare)
 router.post("/:id/share", shareFolder)
 router.delete("/:id/share", unshareFolder)
+router.patch("/:id/final-delivery/unlock", unlockFinalDelivery)
 
 router.get("/:id", getFolder)
 router.put("/:id", uploadCover.single("coverImage"), updateFolder)

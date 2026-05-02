@@ -74,6 +74,11 @@ const folderSchema = new mongoose.Schema(
             selectionSubmittedAt: { type: Date, default: null },
             selectionLocked: { type: Boolean, default: false },
         },
+        /** Final delivery payment / lock (admin multipart on final upload + manual unlock). */
+        finalDelivery: {
+            outstandingAmountGHS: { type: Number, default: null },
+            imagesLocked: { type: Boolean, default: false },
+        },
     },
     { timestamps: true }
 )

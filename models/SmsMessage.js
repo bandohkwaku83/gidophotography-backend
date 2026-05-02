@@ -37,7 +37,7 @@ const smsMessageSchema = new mongoose.Schema(
         },
         trigger: {
             type: String,
-            enum: ["manual", "raw_upload", "final_upload"],
+            enum: ["manual", "raw_upload", "final_upload", "final_delivery_unpaid"],
             default: "manual",
         },
         createdBy: {
