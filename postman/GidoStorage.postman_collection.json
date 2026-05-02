@@ -1,7 +1,7 @@
 {
 	"info": {
 		"name": "GidoStorage Backend",
-		"description": "Auth, clients, folders (client SMS after raw/final only when multipart uploadComplete=true on the last batch), dashboard, settings, share (public), and SMS (Arkesel). Unpaid final SMS default: GIDOPHOTOGRAPHY studio copy with {{outstanding_amount}}, payment bullets, {{gallery_link}} (link uses SMS_FINAL_UNPAID_URL_FORMAT noscheme by default). Unpaid sends skip SMS branding. Set SMS_FINAL_UNPAID_SPLIT_SEND=true to send payment text then link in two SMS. Override body: SMS_NOTIFY_FINAL_UNPAID_TEMPLATE, SMS_FINAL_UNPAID_PAYMENT_BLOCK, parts SMS_NOTIFY_FINAL_UNPAID_PART1 / SMS_NOTIFY_FINAL_UNPAID_PART2. Final upload fields: clientHasPaidForFinals, amountRemainingGHS, lockImagesBeforeUpload; PATCH .../final-delivery/unlock. Raw watermarking when settings.watermarkPreviewImages is true. Optional: WATERMARK_PREVIEW_TEXT.",
+		"description": "Auth, clients, folders, dashboard, settings, share (public), SMS (Arkesel). Unpaid final SMS default: Hi {{client_name}}, photos ready + remaining {{outstanding_amount}} GHS + {{gallery_link}} + MoMo line + signed GidoPhotography/weddings and vows (no SMS branding on unpaid). SMS_FINAL_UNPAID_SPLIT_SEND=true splits before gallery link. SMS_NOTIFY_FINAL_UNPAID_TEMPLATE / SMS_FINAL_UNPAID_PAYMENT_BLOCK override. Final upload: clientHasPaidForFinals, amountRemainingGHS, lockImagesBeforeUpload; PATCH .../final-delivery/unlock. Raw watermarking when settings.watermarkPreviewImages is true.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [

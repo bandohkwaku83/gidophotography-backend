@@ -162,39 +162,42 @@ function galleryLinkForUnpaidSms(folder) {
 }
 
 /**
- * Default payment options (override with SMS_FINAL_UNPAID_PAYMENT_BLOCK).
- * USSD uses *713*2830# (standard dial string).
+ * Optional extra lines for unpaid SMS (e.g. bank details). Default template does not
+ * include {{payment_block}}; add that token to SMS_NOTIFY_FINAL_UNPAID_TEMPLATE if needed.
  */
-const DEFAULT_FINAL_UNPAID_PAYMENT_BLOCK = `• Mobile Money: 024 792 8392 (Kojo Ennin)
-• Bank (GCB – Dome Branch): 1321440000684
-Account Name: GIDOPHOTOGRAPHY
-• USSD: Dial *713*2830# and select "Weddings and Vows"`
+const DEFAULT_FINAL_UNPAID_PAYMENT_BLOCK = ""
 
-const DEFAULT_FINAL_UNPAID_TEMPLATE = `Hi, this is GIDOPHOTOGRAPHY.
+const DEFAULT_FINAL_UNPAID_TEMPLATE = `Hi {{client_name}},
 
-You have an outstanding balance of {{outstanding_amount}} GHS for your photoshoot.
+Your photos are ready. You can complete the remaining payment to access them.
 
-You can complete your payment using any of the options below:
+{{outstanding_amount}} GHS
 
-{{payment_block}}
+{{gallery_link}}
+
+MoMo: 0247928392 (Kojo Ennin)
 
 Thank you.
 
-{{gallery_link}}`
+signed
+GidoPhotography/weddings and vows`
 
-/** When split: payment message first (no URL), then gallery link only. */
-const DEFAULT_FINAL_UNPAID_PART1 = `Hi, this is GIDOPHOTOGRAPHY.
+/** When split: intro + amount (no gallery URL). */
+const DEFAULT_FINAL_UNPAID_PART1 = `Hi {{client_name}},
 
-You have an outstanding balance of {{outstanding_amount}} GHS for your photoshoot.
+Your photos are ready. You can complete the remaining payment to access them.
 
-You can complete your payment using any of the options below:
+{{outstanding_amount}} GHS`
 
-{{payment_block}}
+/** When split: gallery link, MoMo line, thank you, signature. */
+const DEFAULT_FINAL_UNPAID_PART2 = `{{gallery_link}}
 
-Thank you.`
+MoMo: 0247928392 (Kojo Ennin)
 
-/** When split: link only (second SMS). */
-const DEFAULT_FINAL_UNPAID_PART2 = `{{gallery_link}}`
+Thank you.
+
+signed
+GidoPhotography/weddings and vows`
 
 function replaceUnpaidSmsPlaceholders(template, ctx) {
     const { amountStr, paymentBlock, clientName, folder } = ctx
