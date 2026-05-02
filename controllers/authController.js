@@ -56,6 +56,30 @@ export const me = async (req, res) => {
     return res.status(200).json({ user: req.user })
 }
 
+export const updateMe = async (req, res) => {
+    try {
+        const body = req.body || {}
+        const user = req.user
+
+        if (body.name !== undefined) {
+            const n = String(body.name ?? "").trim()
+            user.name = n || undefined
+        }
+        if (body.contact !== undefined) {
+            user.contact = String(body.contact ?? "").trim()
+        }
+
+        await user.save()
+        return res.status(200).json({
+            message: "Profile updated",
+            user,
+        })
+    } catch (error) {
+        console.error("Update profile error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
 export const logout = async (req, res) => {
     try {
         const token = req.token

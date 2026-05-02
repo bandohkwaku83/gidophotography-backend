@@ -30,14 +30,26 @@ const smsMessageSchema = new mongoose.Schema(
             ref: "Folder",
             default: null,
         },
+        booking: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Booking",
+            default: null,
+        },
         recipientType: {
             type: String,
-            enum: ["all_clients", "client"],
+            enum: ["all_clients", "client", "admin"],
             required: true,
         },
         trigger: {
             type: String,
-            enum: ["manual", "raw_upload", "final_upload", "final_delivery_unpaid"],
+            enum: [
+                "manual",
+                "raw_upload",
+                "final_upload",
+                "final_delivery_unpaid",
+                "booking_reminder_client",
+                "booking_reminder_admin",
+            ],
             default: "manual",
         },
         createdBy: {

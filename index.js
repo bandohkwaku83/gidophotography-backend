@@ -16,6 +16,7 @@ import bookingRoutes from "./routes/bookingRoutes.js"
 import { mongoUrlFromEnv } from "./utils/mongoUrlFromEnv.js"
 import { buildCorsMiddleware } from "./utils/corsMiddleware.js"
 import { isObjectStorageS3 } from "./services/objectStorage.js"
+import { startBookingReminderCron } from "./services/bookingReminderJob.js"
 
 // Explicit path so .env is loaded even if cwd differs; override beats empty shell exports
 const envPath = path.join(process.cwd(), ".env")
@@ -120,6 +121,7 @@ mongoose
     .connect(MONGO_URL)
     .then(() => {
         console.log("Connected to MongoDB")
+        startBookingReminderCron()
         if (isObjectStorageS3()) {
             console.log(
                 `[storage] S3: bucket=${process.env.S3_BUCKET} region=${process.env.AWS_REGION}`

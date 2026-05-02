@@ -18,6 +18,12 @@ const userSchema = new mongoose.Schema(
             type: String,
             trim: true,
         },
+        /** Ghana MSISDN-style number for SMS (e.g. booking reminders to the studio user). */
+        contact: {
+            type: String,
+            trim: true,
+            default: "",
+        },
         role: {
             type: String,
             enum: ["user", "admin"],

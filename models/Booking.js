@@ -44,6 +44,14 @@ const bookingSchema = new mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: "User",
         },
+        reminderClientSentAt: {
+            type: Date,
+            default: null,
+        },
+        reminderAdminSentAt: {
+            type: Date,
+            default: null,
+        },
     },
     { timestamps: true }
 )

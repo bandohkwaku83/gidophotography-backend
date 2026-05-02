@@ -406,6 +406,11 @@ export const updateBooking = async (req, res) => {
                 })
             }
             updates.startsAt = nextStarts
+            const prevT = merged.startsAt?.getTime?.()
+            if (prevT !== nextStarts.getTime()) {
+                updates.reminderClientSentAt = null
+                updates.reminderAdminSentAt = null
+            }
         }
 
         const startRef = updates.startsAt || merged.startsAt
