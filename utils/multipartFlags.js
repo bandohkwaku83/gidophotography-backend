@@ -23,3 +23,16 @@ export function readUploadCompleteNotify(req) {
     if (["false", "0", "no", "off"].includes(s)) return false
     return true
 }
+
+/**
+ * How to handle uploads whose basename matches an existing file in the same gallery (same kind).
+ * Multipart text field: duplicateAction or onDuplicate.
+ * @returns {"replace"|"ignore"|null} null = invalid explicit value; default "ignore" when omitted.
+ */
+export function readDuplicateAction(req) {
+    const v = req.body?.duplicateAction ?? req.body?.onDuplicate
+    if (v === undefined || v === null || String(v).trim() === "") return "ignore"
+    const s = String(v).toLowerCase().trim()
+    if (s === "replace" || s === "ignore") return s
+    return null
+}

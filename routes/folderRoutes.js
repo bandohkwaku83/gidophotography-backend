@@ -14,6 +14,7 @@ import {
 import {
     uploadRawMedia,
     uploadFinalMedia,
+    previewUploadDuplicates,
     deleteFolderMedia,
     deleteFolderRawMedia,
     deleteFolderFinalMedia,
@@ -37,6 +38,7 @@ router.post("/", uploadCover.single("coverImage"), createFolder)
 router.get("/", getFolders)
 router.get("/share-link-expiry-presets", listShareLinkExpiryPresets)
 
+router.post("/:id/media/duplicate-preview", previewUploadDuplicates)
 router.post("/:id/media/raw", uploadFolderRaw, uploadRawMedia)
 router.post("/:id/media/final", uploadFolderFinal, uploadFinalMedia)
 router.delete("/:id/media/raw", deleteAllFolderRawMedia)

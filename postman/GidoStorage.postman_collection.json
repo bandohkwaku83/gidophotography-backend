@@ -748,6 +748,26 @@
 					}
 				},
 				{
+					"name": "Preview duplicate filenames (before upload)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"kind\": \"raw\",\n    \"filenames\": [\"IMG_001.jpg\", \"photo.cr3\"]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/media/duplicate-preview",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "media", "duplicate-preview"]
+						},
+						"description": "Lightweight check: send each selected file.name. Response hasConflicts + conflicts[] (existingMediaId). If true, show popup (Replace → POST upload with duplicateAction=replace; Skip → duplicateAction=ignore). Same basename rules as upload."
+					}
+				},
+				{
 					"name": "Upload raw photo (admin)",
 					"event": [
 						{
@@ -775,6 +795,7 @@
 							"mode": "formdata",
 							"formdata": [
 								{ "key": "files", "type": "file", "src": [], "description": "Pick many images at once (key: files). Max 1000 files per request; per-file max defaults to 500MB (FOLDER_MAX_UPLOAD_MB in .env)." },
+								{ "key": "duplicateAction", "value": "ignore", "type": "text", "description": "Set from duplicate popup only: replace overwrites same-named raws; ignore skips them (omit defaults to ignore)." },
 								{ "key": "uploadComplete", "value": "", "type": "text", "description": "Optional. Omit or leave empty = send client SMS after this batch (default). Set false on intermediate batches when splitting uploads across requests; true on the last batch." }
 							]
 						},
@@ -783,7 +804,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "folders", "{{folderId}}", "media", "raw"]
 						},
-						"description": "Batch raw upload. If GET /api/settings has watermarkPreviewImages true, the server generates a watermarked JPEG per image (and a placeholder JPEG for videos) alongside the original; response media[] includes displayUrl when generation succeeded. Client SMS after uploads settle (debounced per folder, SMS_UPLOAD_NOTIFY_DEBOUNCE_MS default 2500ms). smsNotifyScheduled when notify enabled. uploadComplete=false on intermediate batches. Override SMS_NOTIFY_RAW_TEMPLATE."
+						"description": "Batch raw upload. Popup UX: POST .../media/duplicate-preview with filenames first; if hasConflicts, ask user then upload with duplicateAction replace | ignore. Duplicate detection uses original filename basename (case-insensitive). Response: createdCount, replacedCount, ignoredDuplicates*, replacedMediaIds*. If GET /api/settings has watermarkPreviewImages true, watermarked JPEG per image. Client SMS debounced (SMS_UPLOAD_NOTIFY_DEBOUNCE_MS). smsNotifyScheduled. uploadComplete=false on intermediate batches."
 					}
 				},
 				{
@@ -843,6 +864,7 @@
 							"mode": "formdata",
 							"formdata": [
 								{ "key": "files", "type": "file", "src": [], "description": "One or many finals (same field rules as raw). Omit selectionMediaId when uploading multiple." },
+								{ "key": "duplicateAction", "value": "ignore", "type": "text", "description": "From duplicate popup: replace overwrites same-named finals; ignore skips." },
 								{ "key": "selectionMediaId", "value": "{{selectionMediaId}}", "type": "text", "description": "Optional, single-file uploads only. Link this final to a client selection _id." },
 								{ "key": "uploadComplete", "value": "", "type": "text", "description": "Optional. Omit = SMS after this batch (default). false = skip SMS for this batch (use on intermediate batches)." }
 							]
@@ -852,7 +874,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "folders", "{{folderId}}", "media", "final"]
 						},
-						"description": "selectionMediaId only when uploading exactly one file. Final client SMS is debounced per folder (same as raw). Split uploads: uploadComplete=false on intermediate batches. smsNotifyScheduled."
+						"description": "selectionMediaId only when uploading exactly one file. Popup UX: duplicate-preview first; then duplicateAction from modal. Response includes createdCount, replacedCount, ignoredDuplicates*. Final SMS debounced. uploadComplete=false on intermediate batches. smsNotifyScheduled."
 					}
 				},
 				{

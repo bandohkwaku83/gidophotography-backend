@@ -9,7 +9,11 @@ import {
     scheduleRawUploadSms,
     scheduleFinalUploadSms,
 } from "../services/uploadSmsNotifications.js"
-import { readUploadCompleteNotify } from "../utils/multipartFlags.js"
+import {
+    readUploadCompleteNotify,
+    readDuplicateAction,
+} from "../utils/multipartFlags.js"
+import { findDuplicateFolderMedia } from "../utils/duplicateUpload.js"
 import Settings from "../models/Settings.js"
 import {
     generateRawDisplayAsset,
@@ -142,6 +146,168 @@ const rollbackCreatedMedia = async (created) => {
     }
 }
 
+/** Replace-in-place so selections linked by raw _id stay valid. */
+async function replaceExistingRawMedia(req, existingDoc, f, folderId, watermarkOn) {
+    const oldMain = existingDoc.filePath
+    const oldDisp = existingDoc.displayFilePath || ""
+
+    const newMainPath = path.posix.join(
+        "uploads",
+        "folders",
+        folderId,
+        "raw",
+        path.basename(f.path)
+    )
+
+    existingDoc.displayFilePath = ""
+    let displayDiskPath
+    if (watermarkOn) {
+        const { absolutePath, relativePath } = buildWatermarkedDisplayPaths(
+            f.path,
+            folderId
+        )
+        const gen = await generateRawDisplayAsset({
+            sourcePath: f.path,
+            outputAbsolutePath: absolutePath,
+            relativePath,
+            mimeType: f.mimetype,
+        })
+        if (gen.ok) {
+            existingDoc.displayFilePath = relativePath
+            displayDiskPath = absolutePath
+        } else {
+            console.warn(
+                "Watermark display not generated (replace):",
+                f.originalname,
+                gen.error
+            )
+        }
+    }
+
+    existingDoc.filePath = newMainPath
+    existingDoc.originalFilename = f.originalname
+    existingDoc.mimeType = f.mimetype
+    existingDoc.size = f.size
+
+    if (isObjectStorageS3()) {
+        await uploadLocalFileThenRemove(f.path, newMainPath, existingDoc.mimeType)
+        if (existingDoc.displayFilePath && displayDiskPath) {
+            await uploadLocalFileThenRemove(
+                displayDiskPath,
+                existingDoc.displayFilePath,
+                "image/jpeg"
+            )
+        }
+    }
+
+    await existingDoc.save()
+
+    await deleteStoredAsset(oldMain)
+    if (oldDisp) await deleteStoredAsset(oldDisp)
+
+    return existingDoc
+}
+
+/** Replace-in-place; optional selectionMediaIdUpdate only when caller passes a value. */
+async function replaceExistingFinalMedia(
+    existingDoc,
+    f,
+    folderId,
+    selectionMediaIdUpdate
+) {
+    const oldPath = existingDoc.filePath
+    const newPath = path.posix.join(
+        "uploads",
+        "folders",
+        folderId,
+        "finals",
+        path.basename(f.path)
+    )
+
+    existingDoc.filePath = newPath
+    existingDoc.originalFilename = f.originalname
+    existingDoc.mimeType = f.mimetype
+    existingDoc.size = f.size
+    if (selectionMediaIdUpdate !== undefined) {
+        existingDoc.selectionMediaId = selectionMediaIdUpdate
+    }
+
+    if (isObjectStorageS3()) {
+        await uploadLocalFileThenRemove(f.path, newPath, f.mimetype)
+    }
+
+    await existingDoc.save()
+    await deleteStoredAsset(oldPath)
+    return existingDoc
+}
+
+/**
+ * JSON: { kind: "raw" | "final", filenames: string[] } — client passes file.name for each selected file.
+ * Use before multipart upload to show a “replace / skip” popup when hasConflicts is true.
+ */
+export const previewUploadDuplicates = async (req, res) => {
+    try {
+        const { id } = req.params
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: "Invalid folder id" })
+        }
+
+        const folder = await Folder.findById(id)
+        if (!folder) {
+            return res.status(404).json({ message: "Folder not found" })
+        }
+
+        const kind = req.body?.kind
+        const filenames = req.body?.filenames
+
+        if (kind !== "raw" && kind !== "final") {
+            return res.status(400).json({ message: 'kind must be "raw" or "final"' })
+        }
+        if (!Array.isArray(filenames)) {
+            return res.status(400).json({
+                message: "filenames must be an array of strings (e.g. file.name from the file picker)",
+            })
+        }
+
+        const conflicts = []
+        const seenBasenames = new Set()
+        for (const rawName of filenames) {
+            if (rawName == null) continue
+            const name = String(rawName).trim()
+            if (!name) continue
+            const bn = path.basename(name)
+            const dedupeKey = bn.toLowerCase()
+            if (seenBasenames.has(dedupeKey)) continue
+            seenBasenames.add(dedupeKey)
+
+            const existing = await findDuplicateFolderMedia(
+                FolderMedia,
+                id,
+                kind,
+                name
+            )
+            if (existing) {
+                conflicts.push({
+                    originalFilename: name,
+                    basename: bn,
+                    existingMediaId: existing._id,
+                })
+            }
+        }
+
+        return res.status(200).json({
+            folderId: id,
+            kind,
+            hasConflicts: conflicts.length > 0,
+            conflictCount: conflicts.length,
+            conflicts,
+        })
+    } catch (error) {
+        console.error("Preview upload duplicates error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
 export const uploadRawMedia = async (req, res) => {
     const fileParts = collectFolderUploadFiles(req)
     const created = []
@@ -164,10 +330,51 @@ export const uploadRawMedia = async (req, res) => {
             return res.status(404).json({ message: "Folder not found" })
         }
 
+        const dupAction = readDuplicateAction(req)
+        if (dupAction === null) {
+            for (const f of fileParts) unlinkLocalTempFile(f.path)
+            return res.status(400).json({
+                message:
+                    'duplicateAction must be "replace" or "ignore" (or omit for ignore)',
+            })
+        }
+
         const settings = await Settings.getSingleton()
         const watermarkOn = Boolean(settings.watermarkPreviewImages)
 
+        const ignoredDuplicates = []
+        const replacedDocs = []
+        const mediaOut = []
+
         for (const f of fileParts) {
+            const existing = await findDuplicateFolderMedia(
+                FolderMedia,
+                id,
+                "raw",
+                f.originalname
+            )
+            if (existing) {
+                if (dupAction === "ignore") {
+                    unlinkLocalTempFile(f.path)
+                    ignoredDuplicates.push({ originalFilename: f.originalname })
+                    continue
+                }
+                const doc = await replaceExistingRawMedia(
+                    req,
+                    existing,
+                    f,
+                    id,
+                    watermarkOn
+                )
+                replacedDocs.push(doc)
+                mediaOut.push(
+                    serializeRawUpload(req, doc, {
+                        maskOriginalWithDisplay: false,
+                    })
+                )
+                continue
+            }
+
             const filePath = path.posix.join(
                 "uploads",
                 "folders",
@@ -219,6 +426,12 @@ export const uploadRawMedia = async (req, res) => {
                     )
                 }
             }
+
+            mediaOut.push(
+                serializeRawUpload(req, doc, {
+                    maskOriginalWithDisplay: false,
+                })
+            )
         }
 
         const notifySms = readUploadCompleteNotify(req)
@@ -226,12 +439,27 @@ export const uploadRawMedia = async (req, res) => {
             scheduleRawUploadSms(folder._id, req.user?._id)
         }
 
+        const totalDone = created.length + replacedDocs.length
+        const msgParts = []
+        if (totalDone > 0) {
+            msgParts.push(`Uploaded ${totalDone} photo(s)`)
+        }
+        if (ignoredDuplicates.length > 0) {
+            msgParts.push(`${ignoredDuplicates.length} duplicate(s) skipped`)
+        }
+        const message =
+            msgParts.length > 0 ? msgParts.join("; ") : "No new uploads"
+
         return res.status(201).json({
-            message: `Uploaded ${created.length} photo(s)`,
-            count: created.length,
-            media: created.map(({ doc }) =>
-                serializeRawUpload(req, doc, { maskOriginalWithDisplay: false })
-            ),
+            message,
+            count: totalDone,
+            createdCount: created.length,
+            replacedCount: replacedDocs.length,
+            ignoredDuplicatesCount: ignoredDuplicates.length,
+            duplicateAction: dupAction,
+            media: mediaOut,
+            ignoredDuplicates,
+            replacedMediaIds: replacedDocs.map((d) => d._id),
             smsNotifyScheduled: notifySms,
         })
     } catch (error) {
@@ -273,6 +501,15 @@ export const uploadFinalMedia = async (req, res) => {
             return res.status(404).json({ message: "Folder not found" })
         }
 
+        const dupAction = readDuplicateAction(req)
+        if (dupAction === null) {
+            for (const f of fileParts) unlinkLocalTempFile(f.path)
+            return res.status(400).json({
+                message:
+                    'duplicateAction must be "replace" or "ignore" (or omit for ignore)',
+            })
+        }
+
         let selectionRef = null
         if (selectionMediaId) {
             if (fileParts.length > 1) {
@@ -294,7 +531,38 @@ export const uploadFinalMedia = async (req, res) => {
             selectionRef = sel._id
         }
 
+        const ignoredDuplicates = []
+        const replacedDocs = []
+        const mediaOut = []
+
+        /** When one file + selectionMediaId in body, apply to new rows and duplicate replacements. */
+        const selUpdate =
+            fileParts.length === 1 && selectionRef ? selectionRef : undefined
+
         for (const f of fileParts) {
+            const existing = await findDuplicateFolderMedia(
+                FolderMedia,
+                id,
+                "final",
+                f.originalname
+            )
+            if (existing) {
+                if (dupAction === "ignore") {
+                    unlinkLocalTempFile(f.path)
+                    ignoredDuplicates.push({ originalFilename: f.originalname })
+                    continue
+                }
+                const doc = await replaceExistingFinalMedia(
+                    existing,
+                    f,
+                    id,
+                    selUpdate
+                )
+                replacedDocs.push(doc)
+                mediaOut.push(serializeFinal(req, doc))
+                continue
+            }
+
             const filePath = path.posix.join(
                 "uploads",
                 "folders",
@@ -315,6 +583,8 @@ export const uploadFinalMedia = async (req, res) => {
             if (isObjectStorageS3()) {
                 await uploadLocalFileThenRemove(f.path, filePath, doc.mimeType)
             }
+
+            mediaOut.push(serializeFinal(req, doc))
         }
 
         const notifySms = readUploadCompleteNotify(req)
@@ -322,10 +592,27 @@ export const uploadFinalMedia = async (req, res) => {
             scheduleFinalUploadSms(folder._id, req.user?._id)
         }
 
+        const totalDone = created.length + replacedDocs.length
+        const msgParts = []
+        if (totalDone > 0) {
+            msgParts.push(`Uploaded ${totalDone} final image(s)`)
+        }
+        if (ignoredDuplicates.length > 0) {
+            msgParts.push(`${ignoredDuplicates.length} duplicate(s) skipped`)
+        }
+        const message =
+            msgParts.length > 0 ? msgParts.join("; ") : "No new uploads"
+
         return res.status(201).json({
-            message: `Uploaded ${created.length} final image(s)`,
-            count: created.length,
-            media: created.map(({ doc }) => serializeFinal(req, doc)),
+            message,
+            count: totalDone,
+            createdCount: created.length,
+            replacedCount: replacedDocs.length,
+            ignoredDuplicatesCount: ignoredDuplicates.length,
+            duplicateAction: dupAction,
+            media: mediaOut,
+            ignoredDuplicates,
+            replacedMediaIds: replacedDocs.map((d) => d._id),
             smsNotifyScheduled: notifySms,
         })
     } catch (error) {
