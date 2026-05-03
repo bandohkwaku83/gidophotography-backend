@@ -30,6 +30,16 @@ const folderSchema = new mongoose.Schema(
             type: Boolean,
             default: false,
         },
+        /** Stored path under uploads/... (same pattern as coverImage); optional gallery BGM */
+        backgroundMusic: {
+            type: String,
+            default: "",
+            trim: true,
+        },
+        backgroundMusicEnabled: {
+            type: Boolean,
+            default: true,
+        },
         /** 0–100; maps to object-position % for custom covers */
         coverFocalX: {
             type: Number,

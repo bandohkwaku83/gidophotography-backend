@@ -1150,7 +1150,8 @@
 								{ "key": "eventDate", "value": "2026-06-01", "type": "text" },
 								{ "key": "coverImage", "type": "file", "src": [], "description": "Optional. Replaces the cover image." },
 								{ "key": "useDefaultCover", "value": "false", "type": "text", "description": "Set to true to switch to the default cover from settings." },
-								{ "key": "status", "value": "draft", "type": "text", "description": "Optional: draft or completed." }
+								{ "key": "status", "value": "draft", "type": "text", "description": "Optional: draft or completed." },
+								{ "key": "backgroundMusicEnabled", "value": "true", "type": "text", "description": "Optional. true/false toggles whether clients get backgroundMusicUrl on GET /api/share/:id (file must still be uploaded via Put folder background music)." }
 							]
 						},
 						"url": {
@@ -1159,6 +1160,42 @@
 							"path": ["api", "folders", "{{folderId}}"]
 						},
 						"description": "Send only the fields you want to change. Use form-data so you can also replace the cover image. You can also set status to draft or completed here."
+					}
+				},
+				{
+					"name": "Put folder background music (admin)",
+					"request": {
+						"method": "PUT",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "formdata",
+							"formdata": [
+								{ "key": "backgroundMusic", "type": "file", "src": [], "description": "Required. One audio file (e.g. MP3, M4A). Field name must be backgroundMusic. Max size GALLERY_MUSIC_MAX_UPLOAD_MB (default 40)." }
+							]
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/background-music",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "background-music"]
+						},
+						"description": "Replaces any existing gallery background track. Response folder includes backgroundMusicUrl and backgroundMusicEnabled (set true)."
+					}
+				},
+				{
+					"name": "Delete folder background music (admin)",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/background-music",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "background-music"]
+						},
+						"description": "Removes the stored audio file and clears folder.backgroundMusic."
 					}
 				},
 				{
@@ -1201,7 +1238,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "share", "{{shareIdentifier}}"]
 						},
-						"description": "Client gallery bootstrap: uploads, selection, finals, counts, canEditSelections, share.selectionLocked / selectionSubmittedAt, finalDelivery { outstandingAmountGHS, imagesLocked }, rightsProtection. When finalDelivery.imagesLocked is true, finals[].url is GET .../locked-preview (watermarked JPEG), finals[].locked is true, and downloadUrl is omitted; GET .../download returns 403. When unlocked, each final includes downloadUrl. When watermarkPreviewImages is true and a raw preview exists, uploads[].url and selection[].raw.url use the watermarked JPEG."
+						"description": "Client gallery bootstrap: uploads, selection, finals, counts, canEditSelections, share.selectionLocked / selectionSubmittedAt, finalDelivery { outstandingAmountGHS, imagesLocked }, rightsProtection, backgroundMusicEnabled + backgroundMusicUrl (empty when disabled or no file). When finalDelivery.imagesLocked is true, finals[].url is GET .../locked-preview (watermarked JPEG), finals[].locked is true, and downloadUrl is omitted; GET .../download returns 403. When unlocked, each final includes downloadUrl. When watermarkPreviewImages is true and a raw preview exists, uploads[].url and selection[].raw.url use the watermarked JPEG."
 					}
 				},
 				{

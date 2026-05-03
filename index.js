@@ -47,7 +47,9 @@ app.use((err, req, res, next) => {
     if (err instanceof multer.MulterError) {
         const hints = {
             LIMIT_FILE_SIZE:
-                "File exceeds FOLDER_MAX_UPLOAD_MB (default 500MB per file for gallery uploads). Raise it in .env or split the upload.",
+                err.field === "backgroundMusic"
+                    ? "Audio file exceeds GALLERY_MUSIC_MAX_UPLOAD_MB (default 40MB). Raise GALLERY_MUSIC_MAX_UPLOAD_MB in .env or use a shorter track."
+                    : "File exceeds FOLDER_MAX_UPLOAD_MB (default 500MB per file for gallery uploads). Raise it in .env or split the upload.",
             LIMIT_FILE_COUNT:
                 "Too many files in one request. Max is 1000 per upload; send another batch if needed.",
             LIMIT_FIELD_COUNT:
@@ -65,6 +67,9 @@ app.use((err, req, res, next) => {
     }
     if (err && typeof err.message === "string") {
         if (err.message.includes("Unsupported file type")) {
+            return res.status(400).json({ message: err.message })
+        }
+        if (err.message.includes("Only audio files are allowed")) {
             return res.status(400).json({ message: err.message })
         }
     }

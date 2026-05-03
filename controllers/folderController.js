@@ -54,6 +54,20 @@ function normalizeStoredFocal(n, fallback = 50) {
     return fallback
 }
 
+/** Parse multipart / JSON boolean-ish values for `backgroundMusicEnabled`. */
+function parseBackgroundMusicEnabled(raw) {
+    if (raw === undefined) return undefined
+    if (raw === true || raw === 1) return true
+    if (raw === false || raw === 0) return false
+    const s = String(raw).toLowerCase().trim()
+    if (s === "") return null
+    if (s === "true" || s === "1" || s === "yes" || s === "on") return true
+    if (s === "false" || s === "0" || s === "no" || s === "off") {
+        return false
+    }
+    return null
+}
+
 const generateShareCode = async () => {
     for (let i = 0; i < 5; i++) {
         const code = crypto.randomBytes(4).toString("hex")
@@ -69,10 +83,15 @@ const serializeFolder = (req, folder) => {
     const shareExpired = !!(exp && exp < new Date())
     const focalX = normalizeStoredFocal(obj.coverFocalX)
     const focalY = normalizeStoredFocal(obj.coverFocalY)
+    const bgmOn = obj.backgroundMusicEnabled !== false
     return {
         ...obj,
         status: obj.status || "draft",
         coverImageUrl: buildPublicAssetUrl(req, obj.coverImage),
+        backgroundMusicUrl:
+            bgmOn && obj.backgroundMusic
+                ? buildPublicAssetUrl(req, obj.backgroundMusic)
+                : "",
         shareUrl: buildGalleryShareUrl(folder),
         shareExpired,
         coverFocalX: focalX,
@@ -395,6 +414,20 @@ export const updateFolder = async (req, res) => {
             folder.coverFocalY = p
         }
 
+        if (req.body.backgroundMusicEnabled !== undefined) {
+            const parsed = parseBackgroundMusicEnabled(
+                req.body.backgroundMusicEnabled
+            )
+            if (parsed === null) {
+                if (req.file) unlinkLocalTempFile(req.file.path)
+                return res.status(400).json({
+                    message:
+                        "backgroundMusicEnabled must be true or false (or 1/0)",
+                })
+            }
+            folder.backgroundMusicEnabled = parsed
+        }
+
         await folder.save()
         const populated = await folder.populate(
             "client",
@@ -547,6 +580,104 @@ export const regenerateShareLink = async (req, res) => {
 
 export const listShareLinkExpiryPresets = (req, res) => {
     return res.status(200).json({ presets: SHARE_LINK_EXPIRY_PRESETS })
+}
+
+export const uploadFolderBackgroundMusic = async (req, res) => {
+    let newMusicPath = ""
+    let uploadedToS3 = false
+    try {
+        const { id } = req.params
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            if (req.file) unlinkLocalTempFile(req.file.path)
+            return res.status(400).json({ message: "Invalid folder id" })
+        }
+        if (!req.file) {
+            return res.status(400).json({
+                message:
+                    'Send one audio file as multipart field "backgroundMusic"',
+            })
+        }
+
+        const folder = await Folder.findById(id)
+        if (!folder) {
+            unlinkLocalTempFile(req.file.path)
+            return res.status(404).json({ message: "Folder not found" })
+        }
+
+        newMusicPath = path.posix.join(
+            "uploads",
+            "gallery-music",
+            path.basename(req.file.path)
+        )
+
+        if (isObjectStorageS3()) {
+            await uploadLocalFileThenRemove(
+                req.file.path,
+                newMusicPath,
+                req.file.mimetype
+            )
+            uploadedToS3 = true
+        }
+
+        if (folder.backgroundMusic) {
+            await deleteStoredAsset(folder.backgroundMusic)
+        }
+
+        folder.backgroundMusic = newMusicPath
+        folder.backgroundMusicEnabled = true
+        await folder.save()
+
+        const populated = await folder.populate(
+            "client",
+            "name email contact location"
+        )
+
+        return res.status(200).json({
+            message: "Background music updated",
+            folder: serializeFolder(req, populated),
+        })
+    } catch (error) {
+        if (uploadedToS3 && newMusicPath) {
+            await deleteStoredAsset(newMusicPath).catch(() => {})
+        } else if (req.file) {
+            unlinkLocalTempFile(req.file.path)
+        }
+        console.error("Upload folder background music error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+export const deleteFolderBackgroundMusic = async (req, res) => {
+    try {
+        const { id } = req.params
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: "Invalid folder id" })
+        }
+
+        const folder = await Folder.findById(id)
+        if (!folder) {
+            return res.status(404).json({ message: "Folder not found" })
+        }
+
+        if (folder.backgroundMusic) {
+            await deleteStoredAsset(folder.backgroundMusic)
+        }
+        folder.backgroundMusic = ""
+        await folder.save()
+
+        const populated = await folder.populate(
+            "client",
+            "name email contact location"
+        )
+
+        return res.status(200).json({
+            message: "Background music removed",
+            folder: serializeFolder(req, populated),
+        })
+    } catch (error) {
+        console.error("Delete folder background music error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
 }
 
 export const patchFolderShare = async (req, res) => {
@@ -742,6 +873,11 @@ export const getSharedFolder = async (req, res) => {
         )
         const focalX = normalizeStoredFocal(obj.coverFocalX)
         const focalY = normalizeStoredFocal(obj.coverFocalY)
+        const bgmEnabled = obj.backgroundMusicEnabled !== false
+        const backgroundMusicUrl =
+            bgmEnabled && obj.backgroundMusic
+                ? buildPublicAssetUrl(req, obj.backgroundMusic)
+                : ""
 
         return res.status(200).json({
             folder: {
@@ -752,6 +888,8 @@ export const getSharedFolder = async (req, res) => {
                 description: obj.description,
                 coverImage: obj.coverImage,
                 coverImageUrl: buildPublicAssetUrl(req, obj.coverImage),
+                backgroundMusicEnabled: bgmEnabled,
+                backgroundMusicUrl,
                 coverFocalX: focalX,
                 coverFocalY: focalY,
                 cover_focal_x: focalX,
@@ -810,6 +948,9 @@ export const deleteFolder = async (req, res) => {
 
         if (!folder.usingDefaultCover) {
             await deleteStoredAsset(folder.coverImage)
+        }
+        if (folder.backgroundMusic) {
+            await deleteStoredAsset(folder.backgroundMusic)
         }
 
         await Folder.deleteOne({ _id: folder._id })

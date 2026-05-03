@@ -6,4 +6,6 @@ uploads/settings/*
 !uploads/settings/.gitkeep
 uploads/folders/**
 !uploads/folders/.gitkeep
+uploads/gallery-music/*
+!uploads/gallery-music/.gitkeep
 .DS_Store

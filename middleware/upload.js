@@ -13,6 +13,7 @@ const mbFromEnv = (key, fallbackMb) => {
 
 const MAX_FOLDER_FILE_MB = mbFromEnv("FOLDER_MAX_UPLOAD_MB", 500)
 const MAX_COVER_AND_SETTINGS_MB = mbFromEnv("COVER_MAX_UPLOAD_MB", 50)
+const MAX_GALLERY_MUSIC_MB = mbFromEnv("GALLERY_MUSIC_MAX_UPLOAD_MB", 40)
 
 const buildStorage = (subdir) => {
     const dir = path.join("uploads", subdir)
@@ -48,6 +49,34 @@ export const uploadSettingsImage = multer({
     storage: buildStorage("settings"),
     fileFilter: imageFileFilter,
     limits: { fileSize: MAX_COVER_AND_SETTINGS_MB * 1024 * 1024 },
+})
+
+const ACCEPT_AUDIO_EXT = new Set([
+    ".mp3",
+    ".m4a",
+    ".aac",
+    ".ogg",
+    ".oga",
+    ".wav",
+    ".flac",
+    ".webm",
+])
+
+const audioFileFilter = (req, file, cb) => {
+    if (file.mimetype && file.mimetype.startsWith("audio/")) {
+        return cb(null, true)
+    }
+    const ext = path.extname(file.originalname || "").toLowerCase()
+    if (file.mimetype === "application/octet-stream" && ACCEPT_AUDIO_EXT.has(ext)) {
+        return cb(null, true)
+    }
+    cb(new Error("Only audio files are allowed (e.g. MP3, M4A, AAC, OGG, WAV, FLAC)."))
+}
+
+export const uploadBackgroundMusic = multer({
+    storage: buildStorage("gallery-music"),
+    fileFilter: audioFileFilter,
+    limits: { fileSize: MAX_GALLERY_MUSIC_MB * 1024 * 1024 },
 })
 
 const ACCEPT_IMAGE_EXT = new Set([

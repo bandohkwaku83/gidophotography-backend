@@ -11,6 +11,8 @@ import {
     patchFolderShare,
     listShareLinkExpiryPresets,
     unlockFinalDelivery,
+    uploadFolderBackgroundMusic,
+    deleteFolderBackgroundMusic,
 } from "../controllers/folderController.js"
 import {
     uploadRawMedia,
@@ -29,6 +31,7 @@ import {
     uploadCover,
     uploadFolderRaw,
     uploadFolderFinal,
+    uploadBackgroundMusic,
 } from "../middleware/upload.js"
 
 const router = express.Router()
@@ -55,6 +58,13 @@ router.patch("/:id/share", patchFolderShare)
 router.post("/:id/share", shareFolder)
 router.delete("/:id/share", unshareFolder)
 router.patch("/:id/final-delivery/unlock", unlockFinalDelivery)
+
+router.put(
+    "/:id/background-music",
+    uploadBackgroundMusic.single("backgroundMusic"),
+    uploadFolderBackgroundMusic
+)
+router.delete("/:id/background-music", deleteFolderBackgroundMusic)
 
 router.get("/:id", getFolder)
 router.put("/:id", uploadCover.single("coverImage"), updateFolder)
