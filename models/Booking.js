@@ -52,6 +52,11 @@ const bookingSchema = new mongoose.Schema(
             type: Date,
             default: null,
         },
+        /** In-app admin notification for upcoming shoot (once per booking window). */
+        reminderAdminInAppSentAt: {
+            type: Date,
+            default: null,
+        },
     },
     { timestamps: true }
 )

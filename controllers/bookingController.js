@@ -410,6 +410,7 @@ export const updateBooking = async (req, res) => {
             if (prevT !== nextStarts.getTime()) {
                 updates.reminderClientSentAt = null
                 updates.reminderAdminSentAt = null
+                updates.reminderAdminInAppSentAt = null
             }
         }
 

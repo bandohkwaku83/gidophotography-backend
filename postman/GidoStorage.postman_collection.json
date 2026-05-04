@@ -1,7 +1,7 @@
 {
 	"info": {
 		"name": "GidoStorage Backend",
-		"description": "Auth, clients, bookings (calendar), folders, dashboard, settings, share (public), SMS (Arkesel). Bookings: GET /api/bookings/meta, summary/week, list ?year=&month=, CRUD /api/bookings. Unpaid final SMS defaults, final-delivery upload fields, PATCH .../final-delivery/unlock. Raw watermarking when settings.watermarkPreviewImages is true.",
+		"description": "Auth, clients, bookings (calendar), folders, dashboard, settings, share (public), SMS (Arkesel), in-app notifications (admin). Bookings: GET /api/bookings/meta, summary/week, list ?year=&month=, CRUD /api/bookings. Unpaid final SMS defaults, final-delivery upload fields, PATCH .../final-delivery/unlock. Raw watermarking when settings.watermarkPreviewImages is true. Notifications: GET/PATCH /api/notifications (role admin).",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
@@ -52,6 +52,11 @@
 		},
 		{
 			"key": "finalMediaId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "notificationId",
 			"value": "",
 			"type": "string"
 		}
@@ -210,6 +215,91 @@
 							"path": ["api", "auth", "logout"]
 						},
 						"description": "Logs out the current user. Adds the token to a server-side blacklist so it can no longer be used. Also clears the {{token}} collection variable."
+					}
+				}
+			]
+		},
+		{
+			"name": "Notifications (admin)",
+			"item": [
+				{
+					"name": "List notifications",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"if (pm.response.code === 200) {",
+									"    const d = pm.response.json();",
+									"    const n = d.notifications && d.notifications[0];",
+									"    if (n && n._id) pm.collectionVariables.set('notificationId', n._id);",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/notifications?limit=30&skip=0&unreadOnly=false",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "notifications"],
+							"query": [
+								{ "key": "limit", "value": "30" },
+								{ "key": "skip", "value": "0" },
+								{ "key": "unreadOnly", "value": "false", "description": "true = only unread" }
+							]
+						},
+						"description": "Admin only. Returns notifications, total, unreadCount. Each item: type, title, body, folder, booking, shareIdentifier (for gallery deep links), readAt, createdAt."
+					}
+				},
+				{
+					"name": "Unread count",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/notifications/unread-count",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "notifications", "unread-count"]
+						},
+						"description": "Badge count for admin UI."
+					}
+				},
+				{
+					"name": "Mark one read",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/notifications/{{notificationId}}/read",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "notifications", "{{notificationId}}", "read"]
+						},
+						"description": "Set readAt. Run List notifications first to set {{notificationId}}, or paste an _id."
+					}
+				},
+				{
+					"name": "Mark all read",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/notifications/mark-all-read",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "notifications", "mark-all-read"]
+						},
+						"description": "Marks every notification for the current admin as read."
 					}
 				}
 			]

@@ -13,6 +13,7 @@ import dashboardRoutes from "./routes/dashboardRoutes.js"
 import usageRoutes from "./routes/usageRoutes.js"
 import smsRoutes from "./routes/smsRoutes.js"
 import bookingRoutes from "./routes/bookingRoutes.js"
+import notificationRoutes from "./routes/notificationRoutes.js"
 import { mongoUrlFromEnv } from "./utils/mongoUrlFromEnv.js"
 import { buildCorsMiddleware } from "./utils/corsMiddleware.js"
 import { isObjectStorageS3 } from "./services/objectStorage.js"
@@ -42,6 +43,7 @@ app.use("/api/dashboard", dashboardRoutes)
 app.use("/api/usage", usageRoutes)
 app.use("/api/sms", smsRoutes)
 app.use("/api/bookings", bookingRoutes)
+app.use("/api/notifications", notificationRoutes)
 
 app.use((err, req, res, next) => {
     if (err instanceof multer.MulterError) {

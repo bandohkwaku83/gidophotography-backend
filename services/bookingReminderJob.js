@@ -5,6 +5,7 @@ import { sendArkeselSms } from "./arkeselSms.js"
 import { normalizeGhanaMsisdn, formatPhoneDisplay } from "../utils/phoneGh.js"
 import { parseSmsCostPerMessage } from "../utils/smsCost.js"
 import { applySmsBranding } from "../utils/smsBranding.js"
+import { notifyAdminsOfBookingReminder } from "./notificationService.js"
 
 const PLACEHOLDER =
     /\{\{\s*(client_name|shoot_title|starts_at|location|admin_name)\s*\}\}/g
@@ -119,6 +120,27 @@ export async function runBookingReminders() {
             startsAt: startsAtLabel,
             location: loc,
             adminName: creator?.name || "",
+        }
+
+        if (!b.reminderAdminInAppSentAt) {
+            const adminBody = renderBookingReminderTemplate(
+                adminTpl,
+                baseCtx
+            ).trim()
+            const title = `Shoot soon: ${baseCtx.shootTitle || "Booking"}`
+            await notifyAdminsOfBookingReminder({
+                bookingId: b._id,
+                title,
+                body:
+                    adminBody ||
+                    `${baseCtx.clientName} — ${baseCtx.startsAt}${
+                        baseCtx.location ? ` · ${baseCtx.location}` : ""
+                    }`,
+            })
+            await Booking.updateOne(
+                { _id: b._id, reminderAdminInAppSentAt: null },
+                { $set: { reminderAdminInAppSentAt: new Date() } }
+            )
         }
 
         if (!b.reminderClientSentAt && client) {

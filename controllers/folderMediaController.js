@@ -34,6 +34,7 @@ import {
     pipeLockedFinalJpegToResponse,
     isRasterImageMime,
 } from "../utils/finalLockedPreview.js"
+import { notifyAdminsOfFolderSelection } from "../services/notificationService.js"
 
 export const buildPublicUrl = buildPublicAssetUrl
 
@@ -960,6 +961,12 @@ export const addClientSelection = async (req, res) => {
         })
         await doc.populate("rawMediaId")
 
+        void notifyAdminsOfFolderSelection({
+            type: "selection_add",
+            folderId: folder._id,
+            shareIdentifier: identifier,
+        })
+
         return res.status(201).json({
             message: "Photo added to your selection",
             selection: serializeSelection(req, doc, shareSelOpts),
@@ -1003,6 +1010,12 @@ export const removeClientSelection = async (req, res) => {
         }
 
         await FolderMedia.deleteOne({ _id: doc._id })
+
+        void notifyAdminsOfFolderSelection({
+            type: "selection_remove",
+            folderId: folder._id,
+            shareIdentifier: identifier,
+        })
 
         return res.status(200).json({ message: "Photo removed from your selection" })
     } catch (error) {
@@ -1063,15 +1076,18 @@ export const syncClientSelections = async (req, res) => {
             kind: "selection",
         })
 
+        let removed = 0
         for (const sel of existingSelections) {
             if (!want.has(String(sel.rawMediaId))) {
                 await FolderMedia.deleteOne({ _id: sel._id })
+                removed += 1
             }
         }
 
         const have = new Set(
             existingSelections.map((s) => String(s.rawMediaId))
         )
+        let added = 0
         for (const rid of uniqueIds) {
             if (!have.has(String(rid))) {
                 await FolderMedia.create({
@@ -1081,7 +1097,17 @@ export const syncClientSelections = async (req, res) => {
                     rawMediaId: rid,
                     editStatus: "pending",
                 })
+                added += 1
             }
+        }
+
+        if (added > 0 || removed > 0) {
+            void notifyAdminsOfFolderSelection({
+                type: "selection_sync",
+                folderId: folder._id,
+                shareIdentifier: identifier,
+                detail: { added, removed },
+            })
         }
 
         const settings = await Settings.getSingleton()
@@ -1125,9 +1151,15 @@ export const submitClientSelections = async (req, res) => {
         folder.share.selectionSubmittedAt = new Date()
         await folder.save()
 
+        void notifyAdminsOfFolderSelection({
+            type: "selection_submit",
+            folderId: folder._id,
+            shareIdentifier: identifier,
+        })
+
         return res.status(200).json({
             message:
-                "Selection submitted. Your photographer has been notified (when notifications are wired). You can change your picks and submit again anytime.",
+                "Selection submitted. Your photographer has been notified. You can change your picks and submit again anytime.",
             selectionSubmittedAt: folder.share.selectionSubmittedAt,
             selectionLocked: Boolean(folder.share.selectionLocked),
             canEditSelections: true,
