@@ -1092,7 +1092,7 @@
 							"formdata": [
 								{ "key": "files", "type": "file", "src": [], "description": "Pick many images at once (key: files). Max 1000 files per request; per-file max defaults to 500MB (FOLDER_MAX_UPLOAD_MB in .env)." },
 								{ "key": "duplicateAction", "value": "ignore", "type": "text", "description": "Set from duplicate popup only: replace overwrites same-named raws; ignore skips them (omit defaults to ignore)." },
-								{ "key": "uploadComplete", "value": "", "type": "text", "description": "Optional. Omit or leave empty = send client SMS after this batch (default). Set false on intermediate batches when splitting uploads across requests; true on the last batch." }
+								{ "key": "uploadComplete", "value": "", "type": "text", "description": "Omit = SMS after this batch (legacy). For split uploads: false on batches 1..N-1, true (or omit if SMS_UPLOAD_NOTIFY_REQUIRE_EXPLICIT_COMPLETE is false) on the LAST batch only. If SMS_UPLOAD_NOTIFY_REQUIRE_EXPLICIT_COMPLETE=true on server, omit = no SMS — send true on final batch." }
 							]
 						},
 						"url": {
@@ -1100,7 +1100,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "folders", "{{folderId}}", "media", "raw"]
 						},
-						"description": "Batch raw upload. Popup UX: POST .../media/duplicate-preview with filenames first; if hasConflicts, ask user then upload with duplicateAction replace | ignore. Duplicate detection uses original filename basename (case-insensitive). Response: createdCount, replacedCount, ignoredDuplicates*, replacedMediaIds*. If GET /api/settings has watermarkPreviewImages true, watermarked JPEG per image. Client SMS debounced (SMS_UPLOAD_NOTIFY_DEBOUNCE_MS). smsNotifyScheduled. uploadComplete=false on intermediate batches."
+						"description": "Batch raw upload. Popup UX: POST .../media/duplicate-preview with filenames first; if hasConflicts, ask user then upload with duplicateAction replace | ignore. Client SMS: use uploadComplete=false on every HTTP batch except the last (then true or omit) so only one SMS sends after all batches; or set SMS_UPLOAD_NOTIFY_REQUIRE_EXPLICIT_COMPLETE=true on the server and always send uploadComplete=true on the last batch only. Multiple quick requests with notify still coalesce via SMS_UPLOAD_NOTIFY_DEBOUNCE_MS (default 8s, max 300s)."
 					}
 				},
 				{
@@ -1162,7 +1162,7 @@
 								{ "key": "files", "type": "file", "src": [], "description": "One or many finals (same field rules as raw). Omit selectionMediaId when uploading multiple." },
 								{ "key": "duplicateAction", "value": "ignore", "type": "text", "description": "From duplicate popup: replace overwrites same-named finals; ignore skips." },
 								{ "key": "selectionMediaId", "value": "{{selectionMediaId}}", "type": "text", "description": "Optional, single-file uploads only. Link this final to a client selection _id." },
-								{ "key": "uploadComplete", "value": "", "type": "text", "description": "Optional. Omit = SMS after this batch (default). false = skip SMS for this batch (use on intermediate batches)." },
+								{ "key": "uploadComplete", "value": "", "type": "text", "description": "Split uploads: false on intermediate batches; true or omit on final (unless SMS_UPLOAD_NOTIFY_REQUIRE_EXPLICIT_COMPLETE=true — then send true on last batch only)." },
 								{ "key": "clientHasPaidForFinals", "value": "true", "type": "text", "description": "Final delivery flow: true = client paid (clears lock & outstanding). false = unpaid: require amountRemainingGHS (positive); optional lockImagesBeforeUpload true to block downloads and serve watermarked locked-preview URLs on the share gallery. Omit all three payment fields for legacy uploads (no change to folder.finalDelivery)." },
 								{ "key": "amountRemainingGHS", "value": "", "type": "text", "description": "Required when clientHasPaidForFinals=false. Positive number. Aliases also accepted: amountRemaining, outstandingAmountGHS, balance, amount; or nest keys inside a JSON string in field finalDelivery." },
 								{ "key": "lockImagesBeforeUpload", "value": "false", "type": "text", "description": "When unpaid: true enables payment lock (no downloadUrl; finals[].url points at GET .../locked-preview watermarked JPEG). false = client can still download while balance is tracked." }

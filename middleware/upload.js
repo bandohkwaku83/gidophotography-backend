@@ -15,6 +15,19 @@ const MAX_FOLDER_FILE_MB = mbFromEnv("FOLDER_MAX_UPLOAD_MB", 500)
 const MAX_COVER_AND_SETTINGS_MB = mbFromEnv("COVER_MAX_UPLOAD_MB", 50)
 const MAX_GALLERY_MUSIC_MB = mbFromEnv("GALLERY_MUSIC_MAX_UPLOAD_MB", 40)
 
+/** Max image/video files per raw or final upload request (admin batch). */
+const filesFromEnv = (key, fallback, { min, max }) => {
+    const n = Number(process.env[key])
+    if (!Number.isFinite(n) || n < min) return fallback
+    return Math.min(Math.floor(n), max)
+}
+
+const MAX_FILES_PER_REQUEST = filesFromEnv(
+    "FOLDER_MAX_FILES_PER_UPLOAD",
+    1000,
+    { min: 1, max: 5000 }
+)
+
 const buildStorage = (subdir) => {
     const dir = path.join("uploads", subdir)
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
@@ -139,15 +152,21 @@ const folderMediaStorage = (subKind) =>
         },
     })
 
-const MAX_FILES_PER_REQUEST = 1000
 const MAX_FILE_SIZE_BYTES = MAX_FOLDER_FILE_MB * 1024 * 1024
+
+/** Busboy counts every MIME part; large batches need headroom beyond file count. */
+const MULTIPART_MAX_PARTS = Math.min(
+    200_000,
+    Math.max(50_000, MAX_FILES_PER_REQUEST * 40 + 4096)
+)
+const MULTIPART_MAX_FIELDS = Math.max(2000, MAX_FILES_PER_REQUEST + 500)
 
 const folderMediaLimits = {
     fileSize: MAX_FILE_SIZE_BYTES,
     files: MAX_FILES_PER_REQUEST,
     fieldSize: 2 * 1024 * 1024,
-    fields: 200,
-    parts: 32000,
+    fields: MULTIPART_MAX_FIELDS,
+    parts: MULTIPART_MAX_PARTS,
 }
 
 const MULTIPART_FILE_FIELDS = [
@@ -179,6 +198,9 @@ const buildFolderMultipart = (subKind) =>
 
 export const uploadFolderRaw = buildFolderMultipart("raw")
 export const uploadFolderFinal = buildFolderMultipart("final")
+
+/** Resolved max files per raw/final multipart (from FOLDER_MAX_FILES_PER_UPLOAD). */
+export const folderUploadMaxFilesPerRequest = MAX_FILES_PER_REQUEST
 
 export const collectFolderUploadFiles = (req) => {
     const out = []

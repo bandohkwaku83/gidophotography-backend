@@ -4,7 +4,7 @@ import mongoose from "mongoose"
 import Folder from "../models/Folder.js"
 import FolderMedia, { EDIT_STATUSES } from "../models/FolderMedia.js"
 import { FOLDER_STATUS_VALUES } from "../constants/folderStatus.js"
-import { collectFolderUploadFiles } from "../middleware/upload.js"
+import { collectFolderUploadFiles, folderUploadMaxFilesPerRequest } from "../middleware/upload.js"
 import {
     scheduleRawUploadSms,
     scheduleFinalUploadSms,
@@ -340,7 +340,7 @@ export const uploadRawMedia = async (req, res) => {
         if (fileParts.length === 0) {
             return res.status(400).json({
                 message: "No files uploaded",
-                hint: 'Use multipart/form-data with field "files" (best for many images). Max size per file is set by FOLDER_MAX_UPLOAD_MB in .env (default 500MB).',
+                hint: `Use multipart/form-data with field "files" (best for many images). Up to ${folderUploadMaxFilesPerRequest} files per request (FOLDER_MAX_FILES_PER_UPLOAD). Max size per file: FOLDER_MAX_UPLOAD_MB in .env (default 500MB).`,
             })
         }
 
@@ -511,7 +511,7 @@ export const uploadFinalMedia = async (req, res) => {
         if (fileParts.length === 0) {
             return res.status(400).json({
                 message: "No files uploaded",
-                hint: 'Same as raw uploads: use field "files" or "file", etc. Max file size: FOLDER_MAX_UPLOAD_MB in .env (default 500MB).',
+                hint: `Same as raw uploads: use field "files" or "file", etc. Up to ${folderUploadMaxFilesPerRequest} files per request (FOLDER_MAX_FILES_PER_UPLOAD). Max file size: FOLDER_MAX_UPLOAD_MB in .env (default 500MB).`,
             })
         }
 

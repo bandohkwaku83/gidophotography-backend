@@ -1,3 +1,7 @@
+import dotenv from "dotenv"
+
+dotenv.config()
+
 /**
  * Multer places non-file fields on req.body.
  * @deprecated Prefer readUploadCompleteNotify for upload SMS gating.
@@ -10,13 +14,38 @@ export function readMultipartBoolean(req, key) {
     return ["true", "1", "yes", "on"].includes(s)
 }
 
+function envTruthy(key) {
+    const v = process.env[key]
+    if (v === undefined || v === null || String(v).trim() === "") return false
+    const s = String(v).toLowerCase().trim()
+    return ["true", "1", "yes", "on"].includes(s)
+}
+
 /**
  * Whether to queue client SMS after this upload batch.
- * Defaults to true when omitted so normal uploads notify without an extra field.
- * Set uploadComplete=false on intermediate batches when splitting across requests.
+ *
+ * Default (SMS_UPLOAD_NOTIFY_REQUIRE_EXPLICIT_COMPLETE unset/false):
+ * - Omitted / empty → **true** (notify after this batch), same as before.
+ * - Set **uploadComplete=false** on intermediate HTTP batches when splitting
+ *   many files across several requests; set **uploadComplete=true** (or omit
+ *   on the last batch only) so the client gets **one** SMS after the final batch.
+ *
+ * When env SMS_UPLOAD_NOTIFY_REQUIRE_EXPLICIT_COMPLETE=true:
+ * - Omitted / empty → **false** (no SMS). You must send uploadComplete=true on
+ *   the last batch only — guarantees a single SMS for chunked uploads if the
+ *   UI always sends false until the final POST.
  */
 export function readUploadCompleteNotify(req) {
+    const requireExplicit = envTruthy("SMS_UPLOAD_NOTIFY_REQUIRE_EXPLICIT_COMPLETE")
     const v = req.body?.uploadComplete
+
+    if (requireExplicit) {
+        if (v === undefined || v === null || String(v).trim() === "") return false
+        if (typeof v === "boolean") return v
+        const s = String(v).toLowerCase().trim()
+        return ["true", "1", "yes", "on"].includes(s)
+    }
+
     if (v === undefined || v === null || String(v).trim() === "") return true
     if (typeof v === "boolean") return v
     const s = String(v).toLowerCase().trim()

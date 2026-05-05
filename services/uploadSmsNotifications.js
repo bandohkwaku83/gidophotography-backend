@@ -1,7 +1,8 @@
 /**
  * Called after raw/final uploads when readUploadCompleteNotify(req) is true.
  * Notifications are debounced per folder so parallel/chunked uploads (multiple HTTP
- * requests) still produce one SMS (SMS_UPLOAD_NOTIFY_DEBOUNCE_MS).
+ * Notifications are debounced per folder so parallel/chunked uploads (multiple HTTP
+ * requests) still produce one SMS (SMS_UPLOAD_NOTIFY_DEBOUNCE_MS, default 8s, max 300s).
  */
 import Client from "../models/Client.js"
 import Folder from "../models/Folder.js"
@@ -17,11 +18,11 @@ import { applySmsBranding } from "../utils/smsBranding.js"
 function parseUploadNotifyDebounceMs() {
     const raw = process.env.SMS_UPLOAD_NOTIFY_DEBOUNCE_MS
     if (raw === undefined || raw === null || String(raw).trim() === "") {
-        return 2500
+        return 8000
     }
     const n = parseInt(String(raw), 10)
-    if (!Number.isFinite(n)) return 2500
-    return Math.min(Math.max(n, 400), 120000)
+    if (!Number.isFinite(n)) return 8000
+    return Math.min(Math.max(n, 400), 300000)
 }
 
 const rawNotifyTimers = new Map()

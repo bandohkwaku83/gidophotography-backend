@@ -4,6 +4,7 @@ import mongoose from "mongoose"
 import dotenv from "dotenv"
 import path from "path"
 import multer from "multer"
+import { folderUploadMaxFilesPerRequest } from "./middleware/upload.js"
 import authRoutes from "./routes/authRoutes.js"
 import clientRoutes from "./routes/clientRoutes.js"
 import folderRoutes from "./routes/folderRoutes.js"
@@ -53,11 +54,11 @@ app.use((err, req, res, next) => {
                     ? "Audio file exceeds GALLERY_MUSIC_MAX_UPLOAD_MB (default 40MB). Raise GALLERY_MUSIC_MAX_UPLOAD_MB in .env or use a shorter track."
                     : "File exceeds FOLDER_MAX_UPLOAD_MB (default 500MB per file for gallery uploads). Raise it in .env or split the upload.",
             LIMIT_FILE_COUNT:
-                "Too many files in one request. Max is 1000 per upload; send another batch if needed.",
+                `Too many files in one request. Max is ${folderUploadMaxFilesPerRequest} per upload (FOLDER_MAX_FILES_PER_UPLOAD in .env); send another batch if needed.`,
             LIMIT_FIELD_COUNT:
-                "Too many form fields in one multipart request. Try fewer files per batch.",
+                "Too many non-file fields in one multipart request. Reduce extra form fields or split the batch.",
             LIMIT_PART_COUNT:
-                "Too many multipart parts in one request. Upload in smaller batches (e.g. 150 images at a time).",
+                `Too many multipart parts in one request. Try splitting the upload or lowering FOLDER_MAX_FILES_PER_UPLOAD (current max files: ${folderUploadMaxFilesPerRequest}).`,
             LIMIT_UNEXPECTED_FILE:
                 'Use a supported file field name: "files" or "files[]" (recommended for many), or file, file[], photo, photos[], image, images[]. Text fields like selectionMediaId are allowed next to files.',
         }
