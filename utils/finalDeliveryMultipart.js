@@ -9,7 +9,7 @@ function truthyString(v) {
     return ["true", "1", "yes", "y"].includes(s)
 }
 
-function parseAmount(raw) {
+export function parseAmount(raw) {
     if (raw === undefined || raw === null) return null
     if (typeof raw === "number" && Number.isFinite(raw)) {
         if (raw <= 0) return null

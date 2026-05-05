@@ -24,6 +24,7 @@ import {
     deleteStoredAsset,
     unlinkLocalTempFile,
 } from "../services/objectStorage.js"
+import { parseAmount } from "../utils/finalDeliveryMultipart.js"
 
 const SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/
 
@@ -801,6 +802,68 @@ export const unshareFolder = async (req, res) => {
         })
     } catch (error) {
         console.error("Unshare folder error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+export const lockFinalDelivery = async (req, res) => {
+    try {
+        const { id } = req.params
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: "Invalid folder id" })
+        }
+
+        const body = req.body && typeof req.body === "object" ? req.body : {}
+        const $set = {
+            "finalDelivery.imagesLocked": true,
+        }
+
+        const amountKeys = [
+            "outstandingAmountGHS",
+            "amountRemainingGHS",
+            "balance",
+            "amount",
+        ]
+        let amountKeyUsed = null
+        let amountRaw = undefined
+        for (const k of amountKeys) {
+            if (Object.prototype.hasOwnProperty.call(body, k)) {
+                amountKeyUsed = k
+                amountRaw = body[k]
+                break
+            }
+        }
+        if (amountKeyUsed) {
+            if (amountRaw === null || amountRaw === "") {
+                $set["finalDelivery.outstandingAmountGHS"] = null
+            } else {
+                const parsed = parseAmount(amountRaw)
+                if (parsed == null) {
+                    return res.status(400).json({
+                        message:
+                            `${amountKeyUsed} must be a positive number (e.g. 500), or null / empty string to clear the tracked balance.`,
+                    })
+                }
+                $set["finalDelivery.outstandingAmountGHS"] = parsed
+            }
+        }
+
+        const folder = await Folder.findByIdAndUpdate(id, { $set }, { new: true }).populate(
+            "client",
+            "name email contact location"
+        )
+
+        if (!folder) {
+            return res.status(404).json({ message: "Folder not found" })
+        }
+
+        return res.status(200).json({
+            message:
+                "Final images are locked for the share gallery. Clients see watermarked previews only until you unlock or they pay (if you set an outstanding amount).",
+            folder: serializeFolder(req, folder),
+        })
+    } catch (error) {
+        console.error("Lock final delivery error:", error)
         return res.status(500).json({ message: "Server error" })
     }
 }

@@ -11,6 +11,7 @@ import {
     patchFolderShare,
     listShareLinkExpiryPresets,
     unlockFinalDelivery,
+    lockFinalDelivery,
     uploadFolderBackgroundMusic,
     deleteFolderBackgroundMusic,
 } from "../controllers/folderController.js"
@@ -57,6 +58,7 @@ router.post("/:id/share/regenerate", regenerateShareLink)
 router.patch("/:id/share", patchFolderShare)
 router.post("/:id/share", shareFolder)
 router.delete("/:id/share", unshareFolder)
+router.patch("/:id/final-delivery/lock", lockFinalDelivery)
 router.patch("/:id/final-delivery/unlock", unlockFinalDelivery)
 
 router.put(

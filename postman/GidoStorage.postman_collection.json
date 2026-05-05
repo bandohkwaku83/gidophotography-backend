@@ -1,7 +1,7 @@
 {
 	"info": {
 		"name": "GidoStorage Backend",
-		"description": "Auth, clients, bookings (calendar), folders, dashboard, settings, share (public), SMS (Arkesel), in-app notifications (admin). Bookings: GET /api/bookings/meta, summary/week, list ?year=&month=, CRUD /api/bookings. Unpaid final SMS defaults, final-delivery upload fields, PATCH .../final-delivery/unlock. Raw watermarking when settings.watermarkPreviewImages is true. Notifications: GET/PATCH /api/notifications (role admin).",
+		"description": "Auth, clients, bookings (calendar), folders, dashboard, settings, share (public), SMS (Arkesel), in-app notifications (admin). Bookings: GET /api/bookings/meta, summary/week, list ?year=&month=, CRUD /api/bookings. Unpaid final SMS defaults, final-delivery upload fields, PATCH .../final-delivery/lock (lock finals anytime) and .../unlock. Raw watermarking when settings.watermarkPreviewImages is true. Notifications: GET/PATCH /api/notifications (role admin).",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
@@ -991,6 +991,26 @@
 							"path": ["api", "folders", "{{folderId}}", "share", "regenerate"]
 						},
 						"description": "Issues a new share code (old /share/<code> URLs stop working). Optional: clearSlug true removes custom slug. Optional: linkExpiry / expiresAt / expiresInDays to reset the expiry window from now."
+					}
+				},
+				{
+					"name": "Lock final delivery (admin)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"outstandingAmountGHS\": 500\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/final-delivery/lock",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "final-delivery", "lock"]
+						},
+						"description": "Sets finalDelivery.imagesLocked true anytime (e.g. you unlocked by mistake or client did not pay). Optional body: outstandingAmountGHS | amountRemainingGHS | balance | amount (positive number), or null/\"\" to clear balance. Omit all amount keys to lock without changing outstandingAmountGHS. Share gallery then serves watermarked locked-preview URLs and blocks full download until PATCH .../final-delivery/unlock."
 					}
 				},
 				{
