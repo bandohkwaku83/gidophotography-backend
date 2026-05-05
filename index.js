@@ -27,7 +27,8 @@ const envLoaded = dotenv.config({ path: envPath, override: true })
 const app = express()
 
 app.use(buildCorsMiddleware())
-app.use(express.json())
+/** Large duplicate-preview payloads (many long paths) exceed the old 100kb default. */
+app.use(express.json({ limit: "12mb" }))
 
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")))
 

@@ -13,7 +13,11 @@ import {
     readUploadCompleteNotify,
     readDuplicateAction,
 } from "../utils/multipartFlags.js"
-import { findDuplicateFolderMedia } from "../utils/duplicateUpload.js"
+import {
+    findDuplicateFolderMedia,
+    findDuplicateFolderMediaBatch,
+    DUPLICATE_PREVIEW_MAX_FILENAMES,
+} from "../utils/duplicateUpload.js"
 import Settings from "../models/Settings.js"
 import {
     generateRawDisplayAsset,
@@ -289,31 +293,12 @@ export const previewUploadDuplicates = async (req, res) => {
             })
         }
 
-        const conflicts = []
-        const seenBasenames = new Set()
-        for (const rawName of filenames) {
-            if (rawName == null) continue
-            const name = String(rawName).trim()
-            if (!name) continue
-            const bn = path.basename(name)
-            const dedupeKey = bn.toLowerCase()
-            if (seenBasenames.has(dedupeKey)) continue
-            seenBasenames.add(dedupeKey)
-
-            const existing = await findDuplicateFolderMedia(
-                FolderMedia,
-                id,
-                kind,
-                name
-            )
-            if (existing) {
-                conflicts.push({
-                    originalFilename: name,
-                    basename: bn,
-                    existingMediaId: existing._id,
-                })
-            }
-        }
+        const { conflicts, truncated } = await findDuplicateFolderMediaBatch(
+            FolderMedia,
+            id,
+            kind,
+            filenames
+        )
 
         return res.status(200).json({
             folderId: id,
@@ -321,6 +306,8 @@ export const previewUploadDuplicates = async (req, res) => {
             hasConflicts: conflicts.length > 0,
             conflictCount: conflicts.length,
             conflicts,
+            truncated,
+            maxFilenames: DUPLICATE_PREVIEW_MAX_FILENAMES,
         })
     } catch (error) {
         console.error("Preview upload duplicates error:", error)

@@ -1060,7 +1060,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "folders", "{{folderId}}", "media", "duplicate-preview"]
 						},
-						"description": "Lightweight check: send each selected file.name. Response hasConflicts + conflicts[] (existingMediaId). If true, show popup (Replace → POST upload with duplicateAction=replace; Skip → duplicateAction=ignore). Same basename rules as upload."
+						"description": "Sends kind + filenames[] (e.g. every file.name before a big batch). Uses batched DB queries (not one query per file). Response: hasConflicts, conflicts[], truncated (true if filenames exceeded maxFilenames), maxFilenames (5000). If nginx still returns 504, raise proxy_read_timeout. JSON body limit on API is 12mb for this route class."
 					}
 				},
 				{
