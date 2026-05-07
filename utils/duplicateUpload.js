@@ -24,6 +24,29 @@ export async function findDuplicateFolderMedia(
     })
 }
 
+/** Same basename rule as duplicate checks: trim, default "file", case-insensitive key. */
+export function basenameDuplicateKey(originalFilename) {
+    return path
+        .basename(String(originalFilename || "").trim() || "file")
+        .toLowerCase()
+}
+
+/**
+ * One DB round-trip for all folder media of a kind; O(1) duplicate lookups while uploading.
+ * Values are live Mongoose docs (last wins if duplicate basenames exist in DB).
+ */
+export async function loadFolderMediaByBasenameMap(FolderMedia, folderId, kind) {
+    const docs = await FolderMedia.find({ folder: folderId, kind }).sort({
+        createdAt: 1,
+    })
+    const map = new Map()
+    for (const doc of docs) {
+        const k = basenameDuplicateKey(doc.originalFilename)
+        if (k) map.set(k, doc)
+    }
+    return map
+}
+
 /** Max basenames processed in one duplicate-preview call (avoids huge payloads / timeouts). */
 export const DUPLICATE_PREVIEW_MAX_FILENAMES = 5000
 

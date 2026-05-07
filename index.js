@@ -4,6 +4,7 @@ import mongoose from "mongoose"
 import dotenv from "dotenv"
 import path from "path"
 import multer from "multer"
+import sharp from "sharp"
 import { folderUploadMaxFilesPerRequest } from "./middleware/upload.js"
 import authRoutes from "./routes/authRoutes.js"
 import clientRoutes from "./routes/clientRoutes.js"
@@ -24,13 +25,39 @@ import { startBookingReminderCron } from "./services/bookingReminderJob.js"
 const envPath = path.join(process.cwd(), ".env")
 const envLoaded = dotenv.config({ path: envPath, override: true })
 
+const sharpConcurrency = Number(process.env.SHARP_CONCURRENCY)
+if (
+    Number.isFinite(sharpConcurrency) &&
+    sharpConcurrency >= 1 &&
+    sharpConcurrency <= 32
+) {
+    sharp.concurrency(Math.floor(sharpConcurrency))
+}
+
 const app = express()
 
 app.use(buildCorsMiddleware())
 /** Large duplicate-preview payloads (many long paths) exceed the old 100kb default. */
 app.use(express.json({ limit: "12mb" }))
 
-app.use("/uploads", express.static(path.join(process.cwd(), "uploads")))
+const uploadsCacheSecRaw = process.env.UPLOADS_CACHE_MAX_AGE_SEC
+const uploadsCacheSec =
+    uploadsCacheSecRaw === undefined || uploadsCacheSecRaw === ""
+        ? 7 * 24 * 60 * 60
+        : Number(uploadsCacheSecRaw)
+const uploadsLongCache =
+    Number.isFinite(uploadsCacheSec) && uploadsCacheSec > 0
+const uploadsStaticOpts = {
+    etag: true,
+    lastModified: true,
+    ...(uploadsLongCache
+        ? { maxAge: uploadsCacheSec * 1000, immutable: true }
+        : {}),
+}
+app.use(
+    "/uploads",
+    express.static(path.join(process.cwd(), "uploads"), uploadsStaticOpts)
+)
 
 app.get("/", (req, res) => {
     res.json({ message: "GidoStorage API is running" })

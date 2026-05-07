@@ -14,9 +14,10 @@ import {
     readDuplicateAction,
 } from "../utils/multipartFlags.js"
 import {
-    findDuplicateFolderMedia,
     findDuplicateFolderMediaBatch,
     DUPLICATE_PREVIEW_MAX_FILENAMES,
+    loadFolderMediaByBasenameMap,
+    basenameDuplicateKey,
 } from "../utils/duplicateUpload.js"
 import Settings from "../models/Settings.js"
 import {
@@ -133,16 +134,29 @@ export const getFolderMediaCollections = async (
     folderId,
     { clientGallery = false } = {}
 ) => {
+    const rawSelect =
+        "_id filePath displayFilePath originalFilename mimeType size createdAt"
+    const selectionSelect = "_id editStatus rawMediaId createdAt updatedAt"
+    const finalSelect =
+        "_id filePath originalFilename mimeType size selectionMediaId createdAt"
+
     const [rawDocs, selectionDocs, finalDocs] = await Promise.all([
-        FolderMedia.find({ folder: folderId, kind: "raw" }).sort({
-            createdAt: 1,
-        }),
-        FolderMedia.find({ folder: folderId, kind: "selection" })
+        FolderMedia.find({ folder: folderId, kind: "raw" })
+            .select(rawSelect)
             .sort({ createdAt: 1 })
-            .populate("rawMediaId"),
-        FolderMedia.find({ folder: folderId, kind: "final" }).sort({
-            createdAt: 1,
-        }),
+            .lean(),
+        FolderMedia.find({ folder: folderId, kind: "selection" })
+            .select(selectionSelect)
+            .sort({ createdAt: 1 })
+            .populate({
+                path: "rawMediaId",
+                select: rawSelect,
+            })
+            .lean(),
+        FolderMedia.find({ folder: folderId, kind: "final" })
+            .select(finalSelect)
+            .sort({ createdAt: 1 })
+            .lean(),
     ])
 
     const rawOpts = { maskOriginalWithDisplay: clientGallery }
@@ -349,17 +363,19 @@ export const uploadRawMedia = async (req, res) => {
         const settings = await Settings.getSingleton()
         const watermarkOn = Boolean(settings.watermarkPreviewImages)
 
+        const dupByBasename = await loadFolderMediaByBasenameMap(
+            FolderMedia,
+            id,
+            "raw"
+        )
+
         const ignoredDuplicates = []
         const replacedDocs = []
         const mediaOut = []
 
         for (const f of fileParts) {
-            const existing = await findDuplicateFolderMedia(
-                FolderMedia,
-                id,
-                "raw",
-                f.originalname
-            )
+            const dupKey = basenameDuplicateKey(f.originalname)
+            const existing = dupByBasename.get(dupKey)
             if (existing) {
                 if (dupAction === "ignore") {
                     unlinkLocalTempFile(f.path)
@@ -433,6 +449,8 @@ export const uploadRawMedia = async (req, res) => {
                     )
                 }
             }
+
+            dupByBasename.set(dupKey, doc)
 
             mediaOut.push(
                 serializeRawUpload(req, doc, {
@@ -579,13 +597,15 @@ export const uploadFinalMedia = async (req, res) => {
         const selUpdate =
             fileParts.length === 1 && selectionRef ? selectionRef : undefined
 
+        const dupByBasename = await loadFolderMediaByBasenameMap(
+            FolderMedia,
+            id,
+            "final"
+        )
+
         for (const f of fileParts) {
-            const existing = await findDuplicateFolderMedia(
-                FolderMedia,
-                id,
-                "final",
-                f.originalname
-            )
+            const dupKey = basenameDuplicateKey(f.originalname)
+            const existing = dupByBasename.get(dupKey)
             if (existing) {
                 if (dupAction === "ignore") {
                     unlinkLocalTempFile(f.path)
@@ -623,6 +643,8 @@ export const uploadFinalMedia = async (req, res) => {
             if (isObjectStorageS3()) {
                 await uploadLocalFileThenRemove(f.path, filePath, doc.mimeType)
             }
+
+            dupByBasename.set(dupKey, doc)
 
             mediaOut.push(serializeFinal(req, doc))
         }

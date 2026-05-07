@@ -1,13 +1,26 @@
 import fs from "fs"
 import path from "path"
+import https from "https"
 import {
     S3Client,
     PutObjectCommand,
     DeleteObjectCommand,
     GetObjectCommand,
 } from "@aws-sdk/client-s3"
+import { NodeHttpHandler } from "@smithy/node-http-handler"
 
 let s3Client = null
+
+const s3MaxSockets = (() => {
+    const n = Number(process.env.S3_MAX_SOCKETS)
+    if (Number.isFinite(n) && n >= 1) return Math.min(128, Math.floor(n))
+    return 48
+})()
+
+const s3HttpsAgent = new https.Agent({
+    keepAlive: true,
+    maxSockets: s3MaxSockets,
+})
 
 export function isObjectStorageS3() {
     const driver = String(process.env.STORAGE_DRIVER || "")
@@ -21,7 +34,10 @@ export function isObjectStorageS3() {
 
 function getS3() {
     if (!s3Client) {
-        s3Client = new S3Client({ region: process.env.AWS_REGION })
+        s3Client = new S3Client({
+            region: process.env.AWS_REGION,
+            requestHandler: new NodeHttpHandler({ httpsAgent: s3HttpsAgent }),
+        })
     }
     return s3Client
 }
