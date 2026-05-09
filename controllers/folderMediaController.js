@@ -39,7 +39,10 @@ import {
     pipeLockedFinalJpegToResponse,
     isRasterImageMime,
 } from "../utils/finalLockedPreview.js"
-import { notifyAdminsOfFolderSelection } from "../services/notificationService.js"
+import {
+    notifyAdminsOfFolderSelection,
+    notifyAdminsOfFinalDownload,
+} from "../services/notificationService.js"
 
 export const buildPublicUrl = buildPublicAssetUrl
 
@@ -1292,6 +1295,11 @@ export const downloadSharedFinal = async (req, res) => {
                 if (out.ContentLength != null) {
                     res.setHeader("Content-Length", String(out.ContentLength))
                 }
+                void notifyAdminsOfFinalDownload({
+                    folderId: folder._id,
+                    shareIdentifier: identifier,
+                    filename: downloadName,
+                })
                 out.Body.pipe(res)
                 return
             } catch (e) {
@@ -1304,6 +1312,12 @@ export const downloadSharedFinal = async (req, res) => {
         if (!fs.existsSync(absPath)) {
             return res.status(404).json({ message: "File missing on server" })
         }
+
+        void notifyAdminsOfFinalDownload({
+            folderId: folder._id,
+            shareIdentifier: identifier,
+            filename: downloadName,
+        })
 
         return res.download(absPath, downloadName, (err) => {
             if (err && !res.headersSent) {

@@ -119,3 +119,54 @@ export async function notifyAdminsOfBookingReminder({
         console.error("[notifications] notifyAdminsOfBookingReminder:", err)
     }
 }
+
+/**
+ * Notify every admin when a client downloads a final file from the share gallery.
+ */
+export async function notifyAdminsOfFinalDownload({
+    folderId,
+    shareIdentifier = "",
+    filename = "",
+}) {
+    try {
+        if (!folderId || !mongoose.Types.ObjectId.isValid(String(folderId))) {
+            return
+        }
+
+        const [recipients, folder] = await Promise.all([
+            adminRecipientIds(),
+            Folder.findById(folderId)
+                .populate("client", "name")
+                .select("eventName client share")
+                .lean(),
+        ])
+
+        if (!recipients.length || !folder) return
+
+        const clientName = folder.client?.name?.trim() || "Client"
+        const event = folder.eventName?.trim() || "Gallery"
+        const ident =
+            shareIdentifier ||
+            shareLinkLabel(folder) ||
+            String(folder._id)
+        const fileLabel = String(filename || "").trim().slice(0, 180) || "a photo"
+
+        const title = "Client downloaded a final"
+        const body = `${clientName} downloaded “${fileLabel}” from “${event}”.`
+
+        const fid = new mongoose.Types.ObjectId(String(folderId))
+        const docs = recipients.map((recipient) => ({
+            recipient,
+            type: "final_download",
+            title,
+            body,
+            folder: fid,
+            booking: null,
+            shareIdentifier: ident,
+        }))
+
+        await Notification.insertMany(docs)
+    } catch (err) {
+        console.error("[notifications] notifyAdminsOfFinalDownload:", err)
+    }
+}
