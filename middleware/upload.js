@@ -113,16 +113,46 @@ const ACCEPT_IMAGE_EXT = new Set([
     ".raf",
 ])
 
+/** Common video extensions (often sent as application/octet-stream on mobile). */
+const ACCEPT_VIDEO_EXT = new Set([
+    ".mp4",
+    ".m4v",
+    ".mov",
+    ".qt",
+    ".webm",
+    ".mkv",
+    ".avi",
+    ".mpg",
+    ".mpeg",
+    ".3gp",
+    ".3g2",
+    ".ogv",
+    ".wmv",
+])
+
+/** Some phones / tools send MP4 (etc.) as application/* instead of video/*. */
+const VIDEO_APPLICATION_MIMES = new Set([
+    "application/mp4",
+    "application/x-mp4",
+    "application/x-matroska",
+])
+
 const folderMediaFileFilter = (req, file, cb) => {
-    if (file.mimetype.startsWith("image/")) return cb(null, true)
-    if (file.mimetype.startsWith("video/")) return cb(null, true)
+    const mime = String(file.mimetype || "").toLowerCase().trim()
     const ext = path.extname(file.originalname || "").toLowerCase()
-    if (file.mimetype === "application/octet-stream" && ACCEPT_IMAGE_EXT.has(ext)) {
+    const knownExt = ACCEPT_IMAGE_EXT.has(ext) || ACCEPT_VIDEO_EXT.has(ext)
+
+    if (mime.startsWith("image/")) return cb(null, true)
+    if (mime.startsWith("video/")) return cb(null, true)
+    if (VIDEO_APPLICATION_MIMES.has(mime)) return cb(null, true)
+
+    if (knownExt && (mime === "" || mime === "application/octet-stream")) {
         return cb(null, true)
     }
+
     cb(
         new Error(
-            `Unsupported file type (${file.mimetype}). Use images or common camera raw formats.`
+            `Unsupported file type (${mime || "unknown"}). Use images, videos, or common camera raw formats.`
         )
     )
 }
@@ -182,6 +212,10 @@ const MULTIPART_FILE_FIELDS = [
     "images",
     "image[]",
     "images[]",
+    "video",
+    "videos",
+    "video[]",
+    "videos[]",
 ]
 
 const buildFolderMultipart = (subKind) =>

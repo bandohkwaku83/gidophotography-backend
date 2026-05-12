@@ -37,7 +37,9 @@ import {
 import { readFinalDeliveryPaymentFromReq } from "../utils/finalDeliveryMultipart.js"
 import {
     pipeLockedFinalJpegToResponse,
+    pipeLockedFinalVideoPlaceholderToResponse,
     isRasterImageMime,
+    isVideoMime,
 } from "../utils/finalLockedPreview.js"
 import {
     notifyAdminsOfFolderSelection,
@@ -344,7 +346,7 @@ export const uploadRawMedia = async (req, res) => {
         if (fileParts.length === 0) {
             return res.status(400).json({
                 message: "No files uploaded",
-                hint: `Use multipart/form-data with field "files" (best for many images). Up to ${folderUploadMaxFilesPerRequest} files per request (FOLDER_MAX_FILES_PER_UPLOAD). Max size per file: FOLDER_MAX_UPLOAD_MB in .env (default 500MB).`,
+                hint: `Use multipart/form-data with field "files" or "videos" (best for many items). Up to ${folderUploadMaxFilesPerRequest} files per request (FOLDER_MAX_FILES_PER_UPLOAD). Max size per file: FOLDER_MAX_UPLOAD_MB in .env (default 500MB). Images and videos are supported.`,
             })
         }
 
@@ -470,7 +472,7 @@ export const uploadRawMedia = async (req, res) => {
         const totalDone = created.length + replacedDocs.length
         const msgParts = []
         if (totalDone > 0) {
-            msgParts.push(`Uploaded ${totalDone} photo(s)`)
+            msgParts.push(`Uploaded ${totalDone} file(s)`)
         }
         if (ignoredDuplicates.length > 0) {
             msgParts.push(`${ignoredDuplicates.length} duplicate(s) skipped`)
@@ -519,7 +521,7 @@ export const uploadFinalMedia = async (req, res) => {
         if (fileParts.length === 0) {
             return res.status(400).json({
                 message: "No files uploaded",
-                hint: `Same as raw uploads: use field "files" or "file", etc. Up to ${folderUploadMaxFilesPerRequest} files per request (FOLDER_MAX_FILES_PER_UPLOAD). Max file size: FOLDER_MAX_UPLOAD_MB in .env (default 500MB).`,
+                hint: `Same as raw uploads: use field "files", "videos", or "file", etc. Up to ${folderUploadMaxFilesPerRequest} files per request (FOLDER_MAX_FILES_PER_UPLOAD). Max file size: FOLDER_MAX_UPLOAD_MB in .env (default 500MB). Images and videos are supported.`,
             })
         }
 
@@ -660,7 +662,7 @@ export const uploadFinalMedia = async (req, res) => {
         const totalDone = created.length + replacedDocs.length
         const msgParts = []
         if (totalDone > 0) {
-            msgParts.push(`Uploaded ${totalDone} final image(s)`)
+            msgParts.push(`Uploaded ${totalDone} final file(s)`)
         }
         if (ignoredDuplicates.length > 0) {
             msgParts.push(`${ignoredDuplicates.length} duplicate(s) skipped`)
@@ -1212,10 +1214,18 @@ export const streamSharedFinalLockedPreview = async (req, res) => {
             return res.status(404).json({ message: "File not found" })
         }
 
+        if (isVideoMime(finalDoc.mimeType)) {
+            const ok = await pipeLockedFinalVideoPlaceholderToResponse(res)
+            if (!ok && !res.headersSent) {
+                return res.status(422).json({ message: "Could not generate preview" })
+            }
+            return
+        }
+
         if (!isRasterImageMime(finalDoc.mimeType)) {
             return res.status(415).json({
                 message:
-                    "Locked preview is only available for standard image formats.",
+                    "Locked preview is only available for images and videos (videos show a watermarked placeholder).",
             })
         }
 
