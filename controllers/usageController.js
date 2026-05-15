@@ -1,5 +1,6 @@
 import Folder from "../models/Folder.js"
 import FolderMedia from "../models/FolderMedia.js"
+import Client from "../models/Client.js"
 
 const MEDIA = FolderMedia.collection.name
 const CLIENTS_COLL = Client.collection.name
