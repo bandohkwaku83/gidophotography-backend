@@ -115,7 +115,7 @@ const DEFAULT_RAW_UPLOAD_TEMPLATE_NO_LINK =
 async function runRawUploadSms(folderId, userId) {
     if (!envFlag("SMS_NOTIFY_ON_RAW_UPLOAD", true)) return
 
-    const folder = await Folder.findById(folderId)
+    const folder = await Folder.findOne({ _id: folderId, deletedAt: null })
     if (!folder) return
 
     const envRaw = process.env.SMS_NOTIFY_RAW_TEMPLATE?.trim()
@@ -327,7 +327,7 @@ async function runFinalUnpaidUploadSms(folder, userId) {
 }
 
 async function runFinalUploadSmsRouter(folderId, userId) {
-    const folder = await Folder.findById(folderId)
+    const folder = await Folder.findOne({ _id: folderId, deletedAt: null })
     if (!folder) return
 
     const amt = folder.finalDelivery?.outstandingAmountGHS

@@ -32,7 +32,7 @@ export async function notifyAdminsOfFolderSelection(opts) {
 
         const [recipients, folder] = await Promise.all([
             adminRecipientIds(),
-            Folder.findById(folderId)
+            Folder.findOne({ _id: folderId, deletedAt: null })
                 .populate("client", "name")
                 .select("eventName client share")
                 .lean(),
@@ -135,7 +135,7 @@ export async function notifyAdminsOfFinalDownload({
 
         const [recipients, folder] = await Promise.all([
             adminRecipientIds(),
-            Folder.findById(folderId)
+            Folder.findOne({ _id: folderId, deletedAt: null })
                 .populate("client", "name")
                 .select("eventName client share")
                 .lean(),

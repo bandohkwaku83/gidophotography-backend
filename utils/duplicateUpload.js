@@ -20,6 +20,7 @@ export async function findDuplicateFolderMedia(
     return FolderMedia.findOne({
         folder: folderId,
         kind,
+        deletedAt: null,
         originalFilename: regex,
     })
 }
@@ -36,7 +37,11 @@ export function basenameDuplicateKey(originalFilename) {
  * Values are live Mongoose docs (last wins if duplicate basenames exist in DB).
  */
 export async function loadFolderMediaByBasenameMap(FolderMedia, folderId, kind) {
-    const docs = await FolderMedia.find({ folder: folderId, kind }).sort({
+    const docs = await FolderMedia.find({
+        folder: folderId,
+        kind,
+        deletedAt: null,
+    }).sort({
         createdAt: 1,
     })
     const map = new Map()
@@ -103,6 +108,7 @@ export async function findDuplicateFolderMediaBatch(
             return FolderMedia.find({
                 folder: folderId,
                 kind,
+                deletedAt: null,
                 $or,
             })
                 .select("_id originalFilename")

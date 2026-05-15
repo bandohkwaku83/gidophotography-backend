@@ -2,11 +2,11 @@ import path from "path"
 import crypto from "crypto"
 import mongoose from "mongoose"
 import Folder from "../models/Folder.js"
+import FolderMedia from "../models/FolderMedia.js"
 import Client from "../models/Client.js"
 import Settings from "../models/Settings.js"
 import {
     getFolderMediaCollections,
-    deleteAllMediaForFolder,
     serializePublicFinal,
     folderFinalImagesLocked,
 } from "./folderMediaController.js"
@@ -24,6 +24,11 @@ import {
     deleteStoredAsset,
     unlinkLocalTempFile,
 } from "../services/objectStorage.js"
+import {
+    getTrashRetentionDays,
+    isWithinRestoreWindow,
+    restoreDeadlineISO,
+} from "../utils/softDelete.js"
 import { parseAmount } from "../utils/finalDeliveryMultipart.js"
 
 const SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/
@@ -253,6 +258,7 @@ export const getFolders = async (req, res) => {
                 { description: { $regex: search, $options: "i" } },
             ]
         }
+        filter.deletedAt = null
 
         const folders = await Folder.find(filter)
             .populate("client", "name email contact location")
@@ -275,7 +281,7 @@ export const getFolder = async (req, res) => {
             return res.status(400).json({ message: "Invalid folder id" })
         }
 
-        const folder = await Folder.findById(id).populate(
+        const folder = await Folder.findOne({ _id: id, deletedAt: null }).populate(
             "client",
             "name email contact location"
         )
@@ -314,7 +320,7 @@ export const updateFolder = async (req, res) => {
             return res.status(400).json({ message: "Invalid folder id" })
         }
 
-        const folder = await Folder.findById(id)
+        const folder = await Folder.findOne({ _id: id, deletedAt: null })
         if (!folder) {
             if (req.file) unlinkLocalTempFile(req.file.path)
             return res.status(404).json({ message: "Folder not found" })
@@ -455,7 +461,7 @@ export const shareFolder = async (req, res) => {
             return res.status(400).json({ message: "Invalid folder id" })
         }
 
-        const folder = await Folder.findById(id).lean()
+        const folder = await Folder.findOne({ _id: id, deletedAt: null }).lean()
         if (!folder) {
             return res.status(404).json({ message: "Folder not found" })
         }
@@ -473,6 +479,7 @@ export const shareFolder = async (req, res) => {
             }
             const taken = await Folder.findOne({
                 "share.slug": cleanSlug,
+                deletedAt: null,
                 _id: { $ne: folder._id },
             })
             if (taken) {
@@ -512,9 +519,17 @@ export const shareFolder = async (req, res) => {
         const mongoUpdate = { $set: $set }
         if (Object.keys($unset).length) mongoUpdate.$unset = $unset
 
-        const populated = await Folder.findByIdAndUpdate(id, mongoUpdate, {
-            new: true,
-        }).populate("client", "name email contact location")
+        const populated = await Folder.findOneAndUpdate(
+            { _id: id, deletedAt: null },
+            mongoUpdate,
+            {
+                new: true,
+            }
+        ).populate("client", "name email contact location")
+
+        if (!populated) {
+            return res.status(404).json({ message: "Folder not found" })
+        }
 
         return res.status(200).json({
             message: "Folder shared successfully",
@@ -535,7 +550,7 @@ export const regenerateShareLink = async (req, res) => {
             return res.status(400).json({ message: "Invalid folder id" })
         }
 
-        const folder = await Folder.findById(id).lean()
+        const folder = await Folder.findOne({ _id: id, deletedAt: null }).lean()
         if (!folder) {
             return res.status(404).json({ message: "Folder not found" })
         }
@@ -564,9 +579,17 @@ export const regenerateShareLink = async (req, res) => {
             mongoUpdate.$unset = { "share.slug": "" }
         }
 
-        const populated = await Folder.findByIdAndUpdate(id, mongoUpdate, {
-            new: true,
-        }).populate("client", "name email contact location")
+        const populated = await Folder.findOneAndUpdate(
+            { _id: id, deletedAt: null },
+            mongoUpdate,
+            {
+                new: true,
+            }
+        ).populate("client", "name email contact location")
+
+        if (!populated) {
+            return res.status(404).json({ message: "Folder not found" })
+        }
 
         return res.status(200).json({
             message:
@@ -599,7 +622,7 @@ export const uploadFolderBackgroundMusic = async (req, res) => {
             })
         }
 
-        const folder = await Folder.findById(id)
+        const folder = await Folder.findOne({ _id: id, deletedAt: null })
         if (!folder) {
             unlinkLocalTempFile(req.file.path)
             return res.status(404).json({ message: "Folder not found" })
@@ -655,7 +678,7 @@ export const deleteFolderBackgroundMusic = async (req, res) => {
             return res.status(400).json({ message: "Invalid folder id" })
         }
 
-        const folder = await Folder.findById(id)
+        const folder = await Folder.findOne({ _id: id, deletedAt: null })
         if (!folder) {
             return res.status(404).json({ message: "Folder not found" })
         }
@@ -688,7 +711,7 @@ export const patchFolderShare = async (req, res) => {
             return res.status(400).json({ message: "Invalid folder id" })
         }
 
-        const folder = await Folder.findById(id).lean()
+        const folder = await Folder.findOne({ _id: id, deletedAt: null }).lean()
         if (!folder) {
             return res.status(404).json({ message: "Folder not found" })
         }
@@ -733,6 +756,7 @@ export const patchFolderShare = async (req, res) => {
             }
             const taken = await Folder.findOne({
                 "share.slug": cleanSlug,
+                deletedAt: null,
                 _id: { $ne: folder._id },
             })
             if (taken) {
@@ -765,9 +789,17 @@ export const patchFolderShare = async (req, res) => {
             })
         }
 
-        const populated = await Folder.findByIdAndUpdate(id, mongoUpdate, {
-            new: true,
-        }).populate("client", "name email contact location")
+        const populated = await Folder.findOneAndUpdate(
+            { _id: id, deletedAt: null },
+            mongoUpdate,
+            {
+                new: true,
+            }
+        ).populate("client", "name email contact location")
+
+        if (!populated) {
+            return res.status(404).json({ message: "Folder not found" })
+        }
 
         return res.status(200).json({
             message: "Share settings updated",
@@ -786,8 +818,8 @@ export const unshareFolder = async (req, res) => {
             return res.status(400).json({ message: "Invalid folder id" })
         }
 
-        const folder = await Folder.findByIdAndUpdate(
-            id,
+        const folder = await Folder.findOneAndUpdate(
+            { _id: id, deletedAt: null },
             { $set: { "share.enabled": false } },
             { new: true }
         ).populate("client", "name email contact location")
@@ -848,10 +880,11 @@ export const lockFinalDelivery = async (req, res) => {
             }
         }
 
-        const folder = await Folder.findByIdAndUpdate(id, { $set }, { new: true }).populate(
-            "client",
-            "name email contact location"
-        )
+        const folder = await Folder.findOneAndUpdate(
+            { _id: id, deletedAt: null },
+            { $set },
+            { new: true }
+        ).populate("client", "name email contact location")
 
         if (!folder) {
             return res.status(404).json({ message: "Folder not found" })
@@ -875,8 +908,8 @@ export const unlockFinalDelivery = async (req, res) => {
             return res.status(400).json({ message: "Invalid folder id" })
         }
 
-        const folder = await Folder.findByIdAndUpdate(
-            id,
+        const folder = await Folder.findOneAndUpdate(
+            { _id: id, deletedAt: null },
             {
                 $set: {
                     "finalDelivery.imagesLocked": false,
@@ -907,6 +940,7 @@ export const getSharedFolder = async (req, res) => {
 
         const folder = await Folder.findOne({
             "share.enabled": true,
+            deletedAt: null,
             $or: [{ "share.slug": identifier }, { "share.code": identifier }],
         }).populate("client", "name")
 
@@ -1002,27 +1036,119 @@ export const deleteFolder = async (req, res) => {
             return res.status(400).json({ message: "Invalid folder id" })
         }
 
-        const folder = await Folder.findById(id)
+        const folder = await Folder.findOne({ _id: id, deletedAt: null })
         if (!folder) {
             return res.status(404).json({ message: "Folder not found" })
         }
 
-        await deleteAllMediaForFolder(folder._id)
+        const now = new Date()
+        await FolderMedia.updateMany(
+            {
+                folder: folder._id,
+                deletedAt: null,
+            },
+            { $set: { deletedAt: now, deletedBy: "folder" } }
+        )
 
-        if (!folder.usingDefaultCover) {
-            await deleteStoredAsset(folder.coverImage)
-        }
-        if (folder.backgroundMusic) {
-            await deleteStoredAsset(folder.backgroundMusic)
-        }
+        folder.deletedAt = now
+        await folder.save()
 
-        await Folder.deleteOne({ _id: folder._id })
+        const populated = await Folder.findById(folder._id).populate(
+            "client",
+            "name email contact location"
+        )
 
-        return res
-            .status(200)
-            .json({ message: "Folder deleted successfully", folder })
+        return res.status(200).json({
+            message:
+                "Gallery moved to trash; restore within the retention window or it will be permanently deleted.",
+            deletedAt: now.toISOString(),
+            restoreBefore: restoreDeadlineISO(now),
+            retentionDays: getTrashRetentionDays(),
+            folder:
+                populated && serializeFolder(req, populated),
+        })
     } catch (error) {
         console.error("Delete folder error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+export const listDeletedFolders = async (req, res) => {
+    try {
+        const folders = await Folder.find({ deletedAt: { $ne: null } })
+            .populate("client", "name email contact location")
+            .sort({ deletedAt: -1 })
+            .limit(500)
+
+        return res.status(200).json({
+            retentionDays: getTrashRetentionDays(),
+            count: folders.length,
+            folders: folders.map((f) => ({
+                folder: serializeFolder(req, f),
+                deletedAt: f.deletedAt
+                    ? new Date(f.deletedAt).toISOString()
+                    : null,
+                restoreBefore: restoreDeadlineISO(f.deletedAt),
+            })),
+        })
+    } catch (error) {
+        console.error("List deleted folders error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+export const restoreFolder = async (req, res) => {
+    try {
+        const { id } = req.params
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: "Invalid folder id" })
+        }
+
+        const folder = await Folder.findOne({
+            _id: id,
+            deletedAt: { $ne: null },
+        })
+        if (!folder) {
+            return res
+                .status(404)
+                .json({ message: "Deleted gallery not found or already restored" })
+        }
+
+        if (!isWithinRestoreWindow(folder.deletedAt)) {
+            return res.status(410).json({
+                message:
+                    "This gallery can no longer be restored; the retention window has expired.",
+            })
+        }
+
+        folder.deletedAt = null
+        await folder.save()
+
+        await FolderMedia.updateMany(
+            { folder: folder._id, deletedBy: "folder" },
+            {
+                $set: { deletedAt: null },
+                $unset: { deletedBy: 1 },
+            }
+        )
+
+        const populated = await Folder.findOne({
+            _id: folder._id,
+            deletedAt: null,
+        }).populate("client", "name email contact location")
+
+        const media = populated
+            ? await getFolderMediaCollections(req, populated._id)
+            : { uploads: [], selection: [], finals: [] }
+
+        return res.status(200).json({
+            message: "Gallery restored",
+            folder: populated
+                ? { ...serializeFolder(req, populated), ...media }
+                : null,
+        })
+    } catch (error) {
+        console.error("Restore folder error:", error)
         return res.status(500).json({ message: "Server error" })
     }
 }

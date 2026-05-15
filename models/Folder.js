@@ -89,6 +89,8 @@ const folderSchema = new mongoose.Schema(
             outstandingAmountGHS: { type: Number, default: null },
             imagesLocked: { type: Boolean, default: false },
         },
+        /** Set when gallery is deleted; restore within SOFT_DELETE_RETENTION_DAYS before purge cron removes permanently. */
+        deletedAt: { type: Date, default: null, index: true },
     },
     { timestamps: true }
 )

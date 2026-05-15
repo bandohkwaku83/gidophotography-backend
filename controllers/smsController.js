@@ -160,7 +160,10 @@ export const sendBulkSms = async (req, res) => {
             if (!mongoose.Types.ObjectId.isValid(folderId)) {
                 return res.status(400).json({ message: "Invalid folder id" })
             }
-            folderDoc = await Folder.findById(folderId)
+            folderDoc = await Folder.findOne({
+                _id: folderId,
+                deletedAt: null,
+            })
             if (!folderDoc) {
                 return res.status(404).json({ message: "Folder not found" })
             }

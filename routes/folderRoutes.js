@@ -5,6 +5,8 @@ import {
     getFolder,
     updateFolder,
     deleteFolder,
+    listDeletedFolders,
+    restoreFolder,
     shareFolder,
     unshareFolder,
     regenerateShareLink,
@@ -24,6 +26,7 @@ import {
     deleteFolderFinalMedia,
     deleteAllFolderRawMedia,
     deleteAllFolderFinalMedia,
+    restoreFolderMedia,
     patchSelectionEditStatus,
     patchFolderStatus,
 } from "../controllers/folderMediaController.js"
@@ -42,6 +45,10 @@ router.use(protect)
 router.post("/", uploadCover.single("coverImage"), createFolder)
 router.get("/", getFolders)
 router.get("/share-link-expiry-presets", listShareLinkExpiryPresets)
+router.get("/trash", listDeletedFolders)
+
+router.post("/:id/restore", restoreFolder)
+router.post("/:id/media/:mediaId/restore", restoreFolderMedia)
 
 router.post("/:id/media/duplicate-preview", previewUploadDuplicates)
 router.post("/:id/media/raw", uploadFolderRaw, uploadRawMedia)

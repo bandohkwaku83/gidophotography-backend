@@ -52,11 +52,22 @@ const folderMediaSchema = new mongoose.Schema(
             enum: EDIT_STATUSES,
             default: "pending",
         },
+        /** Trash (soft-delete). Omitted/`null` = active in galleries. */
+        deletedAt: { type: Date, default: null, index: true },
+        /**
+         * How the row was tombstoned: `media` = admin deleted asset; `folder` = gallery delete cascade (restored only with gallery restore).
+         */
+        deletedBy: {
+            type: String,
+            enum: ["folder", "media"],
+            default: null,
+        },
     },
     { timestamps: true }
 )
 
 folderMediaSchema.index({ folder: 1, kind: 1, createdAt: 1 })
+folderMediaSchema.index({ folder: 1, deletedAt: 1 })
 
 const FolderMedia = mongoose.model("FolderMedia", folderMediaSchema)
 

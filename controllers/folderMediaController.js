@@ -45,6 +45,11 @@ import {
     notifyAdminsOfFolderSelection,
     notifyAdminsOfFinalDownload,
 } from "../services/notificationService.js"
+import {
+    ACTIVE_MEDIA_MATCH,
+    isWithinRestoreWindow,
+    restoreDeadlineISO,
+} from "../utils/softDelete.js"
 
 export const buildPublicUrl = buildPublicAssetUrl
 
@@ -121,6 +126,7 @@ export const folderFinalImagesLocked = (folder) =>
 const loadActiveSharedFolder = async (identifier) => {
     const folder = await Folder.findOne({
         "share.enabled": true,
+        deletedAt: null,
         $or: [{ "share.slug": identifier }, { "share.code": identifier }],
     })
     if (!folder) {
@@ -146,19 +152,20 @@ export const getFolderMediaCollections = async (
         "_id filePath originalFilename mimeType size selectionMediaId createdAt"
 
     const [rawDocs, selectionDocs, finalDocs] = await Promise.all([
-        FolderMedia.find({ folder: folderId, kind: "raw" })
+        FolderMedia.find({ folder: folderId, kind: "raw", ...ACTIVE_MEDIA_MATCH })
             .select(rawSelect)
             .sort({ createdAt: 1 })
             .lean(),
-        FolderMedia.find({ folder: folderId, kind: "selection" })
+        FolderMedia.find({ folder: folderId, kind: "selection", ...ACTIVE_MEDIA_MATCH })
             .select(selectionSelect)
             .sort({ createdAt: 1 })
             .populate({
                 path: "rawMediaId",
                 select: rawSelect,
+                match: { ...ACTIVE_MEDIA_MATCH },
             })
             .lean(),
-        FolderMedia.find({ folder: folderId, kind: "final" })
+        FolderMedia.find({ folder: folderId, kind: "final", ...ACTIVE_MEDIA_MATCH })
             .select(finalSelect)
             .sort({ createdAt: 1 })
             .lean(),
@@ -295,7 +302,7 @@ export const previewUploadDuplicates = async (req, res) => {
             return res.status(400).json({ message: "Invalid folder id" })
         }
 
-        const folder = await Folder.findById(id)
+        const folder = await Folder.findOne({ _id: id, deletedAt: null })
         if (!folder) {
             return res.status(404).json({ message: "Folder not found" })
         }
@@ -350,7 +357,7 @@ export const uploadRawMedia = async (req, res) => {
             })
         }
 
-        const folder = await Folder.findById(id)
+        const folder = await Folder.findOne({ _id: id, deletedAt: null })
         if (!folder) {
             for (const f of fileParts) unlinkLocalTempFile(f.path)
             return res.status(404).json({ message: "Folder not found" })
@@ -525,7 +532,7 @@ export const uploadFinalMedia = async (req, res) => {
             })
         }
 
-        let folder = await Folder.findById(id)
+        let folder = await Folder.findOne({ _id: id, deletedAt: null })
         if (!folder) {
             for (const f of fileParts) unlinkLocalTempFile(f.path)
             return res.status(404).json({ message: "Folder not found" })
@@ -561,7 +568,7 @@ export const uploadFinalMedia = async (req, res) => {
                     }
                 )
             }
-            folder = await Folder.findById(id)
+            folder = await Folder.findOne({ _id: id, deletedAt: null })
         }
 
         const dupAction = readDuplicateAction(req)
@@ -586,6 +593,7 @@ export const uploadFinalMedia = async (req, res) => {
                 _id: selectionMediaId,
                 folder: id,
                 kind: "selection",
+                ...ACTIVE_MEDIA_MATCH,
             })
             if (!sel) {
                 for (const f of fileParts) unlinkLocalTempFile(f.path)
@@ -707,6 +715,7 @@ const deleteFolderMediaCore = async (req, res, allowedKinds) => {
         const doc = await FolderMedia.findOne({
             _id: mediaId,
             folder: id,
+            ...ACTIVE_MEDIA_MATCH,
         })
         if (!doc) {
             return res.status(404).json({ message: "Media not found" })
@@ -723,6 +732,7 @@ const deleteFolderMediaCore = async (req, res, allowedKinds) => {
                 folder: id,
                 kind: "selection",
                 rawMediaId: doc._id,
+                ...ACTIVE_MEDIA_MATCH,
             })
             if (picks > 0) {
                 return res.status(400).json({
@@ -730,19 +740,16 @@ const deleteFolderMediaCore = async (req, res, allowedKinds) => {
                         "Cannot delete this photo because the client has selected it. Remove selections first.",
                 })
             }
-            await deleteStoredAsset(doc.filePath)
-            await deleteStoredAsset(doc.displayFilePath)
-        } else if (doc.kind === "final") {
-            await deleteStoredAsset(doc.filePath)
-        } else if (doc.kind === "selection") {
-            // no file on disk
         }
 
-        await FolderMedia.deleteOne({ _id: doc._id })
+        doc.deletedAt = new Date()
+        doc.deletedBy = "media"
+        await doc.save()
 
         return res.status(200).json({
-            message: "Media deleted",
+            message: "Media deleted (restorable from trash up to 30 days by default)",
             deleted: { _id: doc._id, kind: doc.kind },
+            restoreBefore: restoreDeadlineISO(doc.deletedAt),
         })
     } catch (error) {
         console.error("Delete folder media error:", error)
@@ -770,7 +777,7 @@ export const deleteAllFolderRawMedia = async (req, res) => {
             return res.status(400).json({ message: "Invalid folder id" })
         }
 
-        const folder = await Folder.findById(id)
+        const folder = await Folder.findOne({ _id: id, deletedAt: null })
         if (!folder) {
             return res.status(404).json({ message: "Folder not found" })
         }
@@ -778,6 +785,7 @@ export const deleteAllFolderRawMedia = async (req, res) => {
         const selectionCount = await FolderMedia.countDocuments({
             folder: id,
             kind: "selection",
+            ...ACTIVE_MEDIA_MATCH,
         })
         if (selectionCount > 0) {
             return res.status(400).json({
@@ -787,16 +795,19 @@ export const deleteAllFolderRawMedia = async (req, res) => {
             })
         }
 
-        const raws = await FolderMedia.find({ folder: id, kind: "raw" })
-        for (const doc of raws) {
-            await deleteStoredAsset(doc.filePath)
-            await deleteStoredAsset(doc.displayFilePath)
-        }
-        const result = await FolderMedia.deleteMany({ folder: id, kind: "raw" })
+        const now = new Date()
+        const result = await FolderMedia.updateMany(
+            { folder: id, kind: "raw", ...ACTIVE_MEDIA_MATCH },
+            {
+                $set: { deletedAt: now, deletedBy: "media" },
+            }
+        )
 
         return res.status(200).json({
-            message: "All raw uploads deleted",
-            deletedCount: result.deletedCount,
+            message:
+                "All raw uploads deleted (restorable individually or via gallery trash within the retention window)",
+            deletedCount: result.modifiedCount ?? 0,
+            restoreBefore: restoreDeadlineISO(now),
         })
     } catch (error) {
         console.error("Delete all raw media error:", error)
@@ -812,20 +823,24 @@ export const deleteAllFolderFinalMedia = async (req, res) => {
             return res.status(400).json({ message: "Invalid folder id" })
         }
 
-        const folder = await Folder.findById(id)
+        const folder = await Folder.findOne({ _id: id, deletedAt: null })
         if (!folder) {
             return res.status(404).json({ message: "Folder not found" })
         }
 
-        const finals = await FolderMedia.find({ folder: id, kind: "final" })
-        for (const doc of finals) {
-            await deleteStoredAsset(doc.filePath)
-        }
-        const result = await FolderMedia.deleteMany({ folder: id, kind: "final" })
+        const now = new Date()
+        const result = await FolderMedia.updateMany(
+            { folder: id, kind: "final", ...ACTIVE_MEDIA_MATCH },
+            {
+                $set: { deletedAt: now, deletedBy: "media" },
+            }
+        )
 
         return res.status(200).json({
-            message: "All final uploads deleted",
-            deletedCount: result.deletedCount,
+            message:
+                "All final uploads deleted (restorable individually or via gallery trash within the retention window)",
+            deletedCount: result.modifiedCount ?? 0,
+            restoreBefore: restoreDeadlineISO(now),
         })
     } catch (error) {
         console.error("Delete all final media error:", error)
@@ -854,7 +869,11 @@ export const patchSelectionEditStatus = async (req, res) => {
             _id: mediaId,
             folder: id,
             kind: "selection",
-        }).populate("rawMediaId")
+            ...ACTIVE_MEDIA_MATCH,
+        }).populate({
+            path: "rawMediaId",
+            match: { ...ACTIVE_MEDIA_MATCH },
+        })
 
         if (!doc) {
             return res.status(404).json({ message: "Selection not found" })
@@ -862,7 +881,10 @@ export const patchSelectionEditStatus = async (req, res) => {
 
         doc.editStatus = editStatus
         await doc.save()
-        await doc.populate("rawMediaId")
+        await doc.populate({
+            path: "rawMediaId",
+            match: { ...ACTIVE_MEDIA_MATCH },
+        })
 
         return res.status(200).json({
             message: "Selection updated",
@@ -890,8 +912,8 @@ export const patchFolderStatus = async (req, res) => {
             })
         }
 
-        const folder = await Folder.findByIdAndUpdate(
-            id,
+        const folder = await Folder.findOneAndUpdate(
+            { _id: id, deletedAt: null },
             { status },
             { new: true }
         ).populate("client", "name email contact location")
@@ -946,6 +968,7 @@ export const addClientSelection = async (req, res) => {
             _id: rawMediaId,
             folder: folder._id,
             kind: "raw",
+            ...ACTIVE_MEDIA_MATCH,
         })
         if (!raw) {
             return res.status(404).json({ message: "Photo not found in gallery" })
@@ -955,6 +978,7 @@ export const addClientSelection = async (req, res) => {
             folder: folder._id,
             kind: "selection",
             rawMediaId: raw._id,
+            ...ACTIVE_MEDIA_MATCH,
         })
         if (existing) {
             const populated = await FolderMedia.findById(existing._id).populate(
@@ -1018,6 +1042,7 @@ export const removeClientSelection = async (req, res) => {
             _id: selectionId,
             folder: folder._id,
             kind: "selection",
+            ...ACTIVE_MEDIA_MATCH,
         })
         if (!doc) {
             return res.status(404).json({ message: "Selection not found" })
@@ -1077,6 +1102,7 @@ export const syncClientSelections = async (req, res) => {
             _id: { $in: uniqueIds },
             folder: folder._id,
             kind: "raw",
+            ...ACTIVE_MEDIA_MATCH,
         })
         if (raws.length !== uniqueIds.length) {
             return res.status(400).json({
@@ -1088,6 +1114,7 @@ export const syncClientSelections = async (req, res) => {
         const existingSelections = await FolderMedia.find({
             folder: folder._id,
             kind: "selection",
+            ...ACTIVE_MEDIA_MATCH,
         })
 
         let removed = 0
@@ -1209,6 +1236,7 @@ export const streamSharedFinalLockedPreview = async (req, res) => {
             _id: mediaId,
             folder: folder._id,
             kind: "final",
+            ...ACTIVE_MEDIA_MATCH,
         })
         if (!finalDoc?.filePath) {
             return res.status(404).json({ message: "File not found" })
@@ -1278,6 +1306,7 @@ export const downloadSharedFinal = async (req, res) => {
             _id: mediaId,
             folder: folder._id,
             kind: "final",
+            ...ACTIVE_MEDIA_MATCH,
         })
         if (!finalDoc?.filePath) {
             return res.status(404).json({ message: "File not found" })
@@ -1341,7 +1370,20 @@ export const downloadSharedFinal = async (req, res) => {
     }
 }
 
-export const deleteAllMediaForFolder = async (folderId) => {
+/** Permanently removes one media row from DB and storage (purge only). */
+export async function hardRemoveMediaDocument(doc) {
+    if (!doc) return
+    if (doc.kind === "raw") {
+        await deleteStoredAsset(doc.filePath)
+        await deleteStoredAsset(doc.displayFilePath)
+    } else if (doc.kind === "final") {
+        await deleteStoredAsset(doc.filePath)
+    }
+    await FolderMedia.deleteOne({ _id: doc._id }).catch(() => {})
+}
+
+/** Deletes all media rows under a folder plus their files (purge). */
+export async function purgeFolderMediaAssetsAndDocuments(folderId) {
     const docs = await FolderMedia.find({ folder: folderId })
     for (const doc of docs) {
         if (doc.kind === "raw" || doc.kind === "final") {
@@ -1351,3 +1393,75 @@ export const deleteAllMediaForFolder = async (folderId) => {
     }
     await FolderMedia.deleteMany({ folder: folderId })
 }
+
+/** Full hard delete of gallery + files (after soft-delete retention expires). */
+export async function purgeFolderWhole(folderRef) {
+    const id = folderRef?._id ?? folderRef
+    const folder =
+        folderRef?.coverImage !== undefined
+            ? folderRef
+            : await Folder.findById(id).lean()
+    if (!folder) return
+    await purgeFolderMediaAssetsAndDocuments(id)
+    if (!folder.usingDefaultCover && folder.coverImage) {
+        await deleteStoredAsset(folder.coverImage)
+    }
+    if (folder.backgroundMusic) {
+        await deleteStoredAsset(folder.backgroundMusic)
+    }
+    await Folder.deleteOne({ _id: id })
+}
+
+export const restoreFolderMedia = async (req, res) => {
+    try {
+        const { id, mediaId } = req.params
+        if (
+            !mongoose.Types.ObjectId.isValid(id) ||
+            !mongoose.Types.ObjectId.isValid(mediaId)
+        ) {
+            return res.status(400).json({ message: "Invalid id" })
+        }
+
+        const folder = await Folder.findOne({ _id: id, deletedAt: null })
+        if (!folder) {
+            return res.status(404).json({
+                message:
+                    "Folder not found or is in trash. Restore the gallery first if it was deleted.",
+            })
+        }
+
+        const doc = await FolderMedia.findOne({ _id: mediaId, folder: id })
+        if (!doc?.deletedAt) {
+            return res
+                .status(404)
+                .json({ message: "Deleted media not found for this gallery" })
+        }
+        if (doc.deletedBy !== "media") {
+            return res.status(400).json({
+                message:
+                    "That file was archived with a deleted gallery. Restore the gallery (POST /api/folders/:id/restore) instead of this item.",
+            })
+        }
+        if (!isWithinRestoreWindow(doc.deletedAt)) {
+            return res.status(410).json({
+                message:
+                    "This item can no longer be restored; the retention window has expired.",
+            })
+        }
+
+        doc.deletedAt = null
+        doc.deletedBy = null
+        await doc.save()
+
+        return res.status(200).json({
+            message: "Media restored",
+            kind: doc.kind,
+            mediaId: doc._id,
+        })
+    } catch (error) {
+        console.error("Restore folder media error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+export const deleteAllMediaForFolder = purgeFolderMediaAssetsAndDocuments

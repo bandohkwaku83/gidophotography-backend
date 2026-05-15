@@ -1,6 +1,5 @@
 import Folder from "../models/Folder.js"
 import FolderMedia from "../models/FolderMedia.js"
-import Client from "../models/Client.js"
 
 const MEDIA = FolderMedia.collection.name
 const CLIENTS_COLL = Client.collection.name
@@ -16,6 +15,7 @@ function pct(part, total) {
 export const getUsageSummary = async (req, res) => {
     try {
         const rows = await FolderMedia.aggregate([
+            { $match: { deletedAt: null } },
             {
                 $group: {
                     _id: null,
@@ -123,6 +123,7 @@ export const getUsageGalleries = async (req, res) => {
                 : { total_size_bytes: sortDir }
 
         const galleries = await Folder.aggregate([
+            { $match: { deletedAt: null } },
             {
                 $lookup: {
                     from: MEDIA,
@@ -131,6 +132,7 @@ export const getUsageGalleries = async (req, res) => {
                         {
                             $match: {
                                 $expr: { $eq: ["$folder", "$$fid"] },
+                                deletedAt: null,
                             },
                         },
                         {

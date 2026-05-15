@@ -24,15 +24,16 @@ export const getDashboard = async (req, res) => {
             completedGalleries,
         ] = await Promise.all([
             Client.countDocuments(),
-            Folder.countDocuments(),
+            Folder.countDocuments({ deletedAt: null }),
             Folder.countDocuments({
+                deletedAt: null,
                 status: { $in: ["delivered", "completed"] },
             }),
         ])
 
         const inProgressGalleries = Math.max(0, totalGalleries - completedGalleries)
 
-        const recentFolders = await Folder.find()
+        const recentFolders = await Folder.find({ deletedAt: null })
             .populate("client", "name")
             .sort({ updatedAt: -1 })
             .limit(recentLimit)
@@ -49,7 +50,7 @@ export const getDashboard = async (req, res) => {
         }))
 
         const [folderRows, clientRows] = await Promise.all([
-            Folder.find()
+            Folder.find({ deletedAt: null })
                 .select("eventName createdAt updatedAt")
                 .sort({ updatedAt: -1 })
                 .limit(30)
