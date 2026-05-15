@@ -8,6 +8,8 @@ import Settings from "../models/Settings.js"
 import {
     getFolderMediaCollections,
     getDeletedGalleryMediaTrashListing,
+    hardRemoveMediaDocument,
+    purgeFolderWhole,
     serializePublicFinal,
     folderFinalImagesLocked,
 } from "./folderMediaController.js"
@@ -1178,6 +1180,181 @@ export const restoreFolder = async (req, res) => {
         })
     } catch (error) {
         console.error("Restore folder error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+function uniqueValidObjectIds(arr) {
+    if (!Array.isArray(arr)) return []
+    const seen = new Set()
+    for (const x of arr) {
+        const s = x != null ? String(x).trim() : ""
+        if (s && mongoose.Types.ObjectId.isValid(s)) seen.add(s)
+    }
+    return [...seen]
+}
+
+/**
+ * Permanently deletes soft-deleted galleries and/or individually trashed media (bypasses retention).
+ * Body: { all: true } | { folderIds: string[], mediaIds?: string[] }
+ */
+export const purgeTrash = async (req, res) => {
+    try {
+        const body = req.body && typeof req.body === "object" ? req.body : {}
+        const all =
+            body.all === true ||
+            body.all === "true" ||
+            body.purgeAll === true ||
+            body.purgeAll === "true"
+
+        let purgedFolderCount = 0
+        let purgedMediaCount = 0
+        const errors = []
+        const skipped = []
+
+        if (all) {
+            const trashedFolders = await Folder.find({ deletedAt: { $ne: null } })
+                .lean()
+            for (const f of trashedFolders) {
+                try {
+                    await purgeFolderWhole(f)
+                    purgedFolderCount += 1
+                } catch (err) {
+                    errors.push({
+                        folderId: String(f._id),
+                        message:
+                            err?.message ||
+                            "Failed to permanently delete this gallery",
+                    })
+                }
+            }
+
+            const remaining = await FolderMedia.find({
+                deletedAt: { $ne: null },
+            }).lean()
+            for (const doc of remaining) {
+                try {
+                    await hardRemoveMediaDocument(doc)
+                    purgedMediaCount += 1
+                } catch (err) {
+                    errors.push({
+                        mediaId: String(doc._id),
+                        message:
+                            err?.message ||
+                            "Failed to permanently delete this media item",
+                    })
+                }
+            }
+
+            return res.status(200).json({
+                message: "All trash has been permanently deleted",
+                purgedFolderCount,
+                purgedMediaCount,
+                ...(errors.length ? { errors } : {}),
+            })
+        }
+
+        const folderIds = uniqueValidObjectIds(body.folderIds)
+        const mediaIds = uniqueValidObjectIds(body.mediaIds)
+
+        if (!folderIds.length && !mediaIds.length) {
+            return res.status(400).json({
+                message:
+                    'Send { "all": true } to empty all trash, or non-empty "folderIds" and/or "mediaIds" arrays to purge selected items.',
+            })
+        }
+
+        for (const fid of folderIds) {
+            const folder = await Folder.findOne({
+                _id: fid,
+                deletedAt: { $ne: null },
+            }).lean()
+            if (!folder) {
+                skipped.push({
+                    folderId: fid,
+                    reason: "Not in trash or not found.",
+                })
+                continue
+            }
+            try {
+                await purgeFolderWhole(folder)
+                purgedFolderCount += 1
+            } catch (err) {
+                errors.push({
+                    folderId: fid,
+                    message:
+                        err?.message ||
+                        "Failed to permanently delete this gallery",
+                })
+            }
+        }
+
+        for (const mid of mediaIds) {
+            const doc = await FolderMedia.findById(mid).lean()
+            if (!doc?.deletedAt) {
+                skipped.push({
+                    mediaId: mid,
+                    reason: "Not in trash or not found.",
+                })
+                continue
+            }
+            if (doc.deletedBy !== "media") {
+                skipped.push({
+                    mediaId: mid,
+                    reason:
+                        "This file was archived with a deleted gallery. Purge that gallery from trash instead.",
+                })
+                continue
+            }
+
+            const parent = await Folder.findById(doc.folder)
+                .select("deletedAt")
+                .lean()
+            if (!parent) {
+                try {
+                    await hardRemoveMediaDocument(doc)
+                    purgedMediaCount += 1
+                } catch (err) {
+                    errors.push({
+                        mediaId: mid,
+                        message:
+                            err?.message ||
+                            "Failed to permanently delete this media item",
+                    })
+                }
+                continue
+            }
+            if (parent.deletedAt) {
+                skipped.push({
+                    mediaId: mid,
+                    reason:
+                        "The parent gallery is in trash. Purge the gallery row instead of individual files.",
+                })
+                continue
+            }
+
+            try {
+                await hardRemoveMediaDocument(doc)
+                purgedMediaCount += 1
+            } catch (err) {
+                errors.push({
+                    mediaId: mid,
+                    message:
+                        err?.message ||
+                        "Failed to permanently delete this media item",
+                })
+            }
+        }
+
+        return res.status(200).json({
+            message: "Trash purge completed",
+            purgedFolderCount,
+            purgedMediaCount,
+            ...(skipped.length ? { skipped } : {}),
+            ...(errors.length ? { errors } : {}),
+        })
+    } catch (error) {
+        console.error("Purge trash error:", error)
         return res.status(500).json({ message: "Server error" })
     }
 }

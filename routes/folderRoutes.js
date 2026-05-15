@@ -7,6 +7,7 @@ import {
     deleteFolder,
     listDeletedFolders,
     restoreFolder,
+    purgeTrash,
     shareFolder,
     unshareFolder,
     regenerateShareLink,
@@ -47,6 +48,7 @@ router.post("/", uploadCover.single("coverImage"), createFolder)
 router.get("/", getFolders)
 router.get("/share-link-expiry-presets", listShareLinkExpiryPresets)
 router.get("/trash", listDeletedFolders)
+router.post("/trash/purge", purgeTrash)
 router.get("/media/trash", listDeletedFolderMedia)
 
 router.post("/:id/restore", restoreFolder)
