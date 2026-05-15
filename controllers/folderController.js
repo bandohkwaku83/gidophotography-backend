@@ -7,6 +7,7 @@ import Client from "../models/Client.js"
 import Settings from "../models/Settings.js"
 import {
     getFolderMediaCollections,
+    getDeletedGalleryMediaTrashListing,
     serializePublicFinal,
     folderFinalImagesLocked,
 } from "./folderMediaController.js"
@@ -1075,10 +1076,31 @@ export const deleteFolder = async (req, res) => {
 
 export const listDeletedFolders = async (req, res) => {
     try {
-        const folders = await Folder.find({ deletedAt: { $ne: null } })
-            .populate("client", "name email contact location")
-            .sort({ deletedAt: -1 })
-            .limit(500)
+        const mediaLimitRaw = Number.parseInt(String(req.query.mediaLimit ?? ""), 10)
+        const mediaLimit =
+            Number.isFinite(mediaLimitRaw) &&
+            mediaLimitRaw > 0 &&
+            mediaLimitRaw <= 500
+                ? mediaLimitRaw
+                : 200
+
+        const [folders, mediaListing] = await Promise.all([
+            Folder.find({ deletedAt: { $ne: null } })
+                .populate("client", "name email contact location")
+                .sort({ deletedAt: -1 })
+                .limit(500),
+            getDeletedGalleryMediaTrashListing(req, {
+                page: 1,
+                limit: mediaLimit,
+            }).catch(() => ({
+                items: [],
+                total: 0,
+                page: 1,
+                limit: mediaLimit,
+            })),
+        ])
+
+        const deletedMediaItems = mediaListing.items ?? []
 
         return res.status(200).json({
             retentionDays: getTrashRetentionDays(),
@@ -1090,6 +1112,13 @@ export const listDeletedFolders = async (req, res) => {
                     : null,
                 restoreBefore: restoreDeadlineISO(f.deletedAt),
             })),
+            deletedMediaTotal: mediaListing.total,
+            deletedMediaPreviewLimit: mediaListing.limit,
+            deletedMedia: deletedMediaItems,
+            deletedMediaPagingHint:
+                mediaListing.total > deletedMediaItems.length
+                    ? "Use GET /api/folders/media/trash?page=2&limit=… to page; optional folderId= filters one gallery."
+                    : null,
         })
     } catch (error) {
         console.error("List deleted folders error:", error)

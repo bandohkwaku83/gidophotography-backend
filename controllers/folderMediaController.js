@@ -47,9 +47,12 @@ import {
 } from "../services/notificationService.js"
 import {
     ACTIVE_MEDIA_MATCH,
+    getTrashRetentionDays,
     isWithinRestoreWindow,
     restoreDeadlineISO,
 } from "../utils/softDelete.js"
+
+const FOLDER_COLL = Folder.collection.name
 
 export const buildPublicUrl = buildPublicAssetUrl
 
@@ -1410,6 +1413,156 @@ export async function purgeFolderWhole(folderRef) {
         await deleteStoredAsset(folder.backgroundMusic)
     }
     await Folder.deleteOne({ _id: id })
+}
+
+/**
+ * Paginated trash for items deleted from an **active** gallery (`deletedBy: "media"`).
+ * Used by GET /folders/media/trash and merged into GET /folders/trash.
+ */
+export async function getDeletedGalleryMediaTrashListing(req, opts = {}) {
+    let page = Number.parseInt(String(opts.page ?? 1), 10)
+    let limit = Number.parseInt(String(opts.limit ?? 50), 10)
+    if (!Number.isFinite(page) || page < 1) page = 1
+    if (!Number.isFinite(limit)) limit = 50
+    limit = Math.min(Math.max(limit, 1), 500)
+    const skip = (page - 1) * limit
+
+    const folderId = opts.folderId
+    const mediaMatch = {
+        deletedAt: { $ne: null },
+        deletedBy: "media",
+    }
+    if (folderId !== undefined && folderId !== null && String(folderId).trim() !== "") {
+        if (!mongoose.Types.ObjectId.isValid(folderId)) {
+            throw new Error("INVALID_FOLDER_ID")
+        }
+        mediaMatch.folder = new mongoose.Types.ObjectId(String(folderId).trim())
+    }
+
+    const activeParentFolder = {
+        $or: [
+            { "folderDoc.deletedAt": null },
+            { "folderDoc.deletedAt": { $exists: false } },
+        ],
+    }
+
+    const baseStages = [
+        { $match: mediaMatch },
+        {
+            $lookup: {
+                from: FOLDER_COLL,
+                localField: "folder",
+                foreignField: "_id",
+                as: "folderDoc",
+            },
+        },
+        {
+            $unwind: {
+                path: "$folderDoc",
+                preserveNullAndEmptyArrays: false,
+            },
+        },
+        { $match: activeParentFolder },
+    ]
+
+    const [countAgg, rows] = await Promise.all([
+        FolderMedia.aggregate([
+            ...baseStages,
+            { $count: "total" },
+        ]),
+        FolderMedia.aggregate([
+            ...baseStages,
+            { $sort: { deletedAt: -1 } },
+            { $skip: skip },
+            { $limit: limit },
+        ]),
+    ])
+
+    const total = countAgg[0]?.total ?? 0
+
+    const items = rows.map((row) => {
+        const d =
+            row.deletedAt instanceof Date
+                ? row.deletedAt
+                : new Date(row.deletedAt)
+        let item = null
+        if (row.kind === "raw") {
+            item = serializeRawUpload(req, row, {
+                maskOriginalWithDisplay: false,
+            })
+        } else if (row.kind === "final") {
+            item = serializeFinal(req, row)
+        } else if (row.kind === "selection") {
+            item = {
+                _id: row._id,
+                editStatus: row.editStatus,
+                rawMediaId: row.rawMediaId ?? null,
+            }
+        }
+
+        return {
+            mediaId: row._id,
+            folderId: row.folderDoc._id,
+            gallery: {
+                _id: row.folderDoc._id,
+                eventName: row.folderDoc.eventName,
+            },
+            kind: row.kind,
+            deletedAt: Number.isNaN(d.getTime()) ? null : d.toISOString(),
+            restoreBefore: restoreDeadlineISO(d),
+            restorable: isWithinRestoreWindow(d),
+            item,
+        }
+    })
+
+    return { items, total, page, limit }
+}
+
+export const listDeletedFolderMedia = async (req, res) => {
+    try {
+        const { folderId } = req.query
+        let page = Number.parseInt(String(req.query.page ?? "1"), 10)
+
+        let limit = Number.parseInt(String(req.query.limit ?? "50"), 10)
+        if (
+            folderId !== undefined &&
+            folderId !== null &&
+            String(folderId).trim() !== "" &&
+            !mongoose.Types.ObjectId.isValid(folderId)
+        ) {
+            return res.status(400).json({
+                message: "Invalid folderId query parameter",
+            })
+        }
+
+        let listing
+        try {
+            listing = await getDeletedGalleryMediaTrashListing(req, {
+                folderId,
+                page,
+                limit,
+            })
+        } catch (e) {
+            if (e.message === "INVALID_FOLDER_ID") {
+                return res.status(400).json({
+                    message: "Invalid folderId query parameter",
+                })
+            }
+            throw e
+        }
+
+        return res.status(200).json({
+            retentionDays: getTrashRetentionDays(),
+            deletedMediaTotal: listing.total,
+            page: listing.page,
+            limit: listing.limit,
+            count: listing.items.length,
+            deletedMedia: listing.items,
+        })
+    } catch (error) {
+        console.error("List deleted folder media error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
 }
 
 export const restoreFolderMedia = async (req, res) => {

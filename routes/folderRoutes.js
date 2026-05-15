@@ -26,6 +26,7 @@ import {
     deleteFolderFinalMedia,
     deleteAllFolderRawMedia,
     deleteAllFolderFinalMedia,
+    listDeletedFolderMedia,
     restoreFolderMedia,
     patchSelectionEditStatus,
     patchFolderStatus,
@@ -46,6 +47,7 @@ router.post("/", uploadCover.single("coverImage"), createFolder)
 router.get("/", getFolders)
 router.get("/share-link-expiry-presets", listShareLinkExpiryPresets)
 router.get("/trash", listDeletedFolders)
+router.get("/media/trash", listDeletedFolderMedia)
 
 router.post("/:id/restore", restoreFolder)
 router.post("/:id/media/:mediaId/restore", restoreFolderMedia)
