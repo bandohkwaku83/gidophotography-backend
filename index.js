@@ -37,6 +37,14 @@ if (
 
 const app = express()
 
+/** Behind nginx/Ingress use TRUST_PROXY=1 so req.protocol/host match the public URL for asset links. */
+if (
+    process.env.TRUST_PROXY === "1" ||
+    process.env.TRUST_PROXY === "true"
+) {
+    app.set("trust proxy", true)
+}
+
 app.use(buildCorsMiddleware())
 /** Large duplicate-preview payloads (many long paths) exceed the old 100kb default. */
 app.use(express.json({ limit: "12mb" }))

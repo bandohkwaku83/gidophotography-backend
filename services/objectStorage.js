@@ -60,6 +60,27 @@ function encodeKeySegments(key) {
     return key.split("/").filter(Boolean).map(encodeURIComponent).join("/")
 }
 
+/**
+ * Absolute base used for local-disk upload URLs (`uploads/...`) in JSON responses.
+ * Set when the API sits behind nginx/PM2 but clients must fetch files from another public origin.
+ */
+export function publicBaseUrlLocalUploads(req) {
+    const forced =
+        process.env.UPLOAD_PUBLIC_BASE_URL?.trim() ||
+        process.env.PUBLIC_API_URL?.trim()
+    if (forced) return forced.replace(/\/$/, "")
+    try {
+        if (req?.get?.("host")) {
+            const proto =
+                typeof req.protocol === "string" && req.protocol
+                    ? req.protocol
+                    : "http"
+            return `${proto}://${req.get("host")}`
+        }
+    } catch (_) {}
+    return ""
+}
+
 export function publicUrlForStoredPath(req, storedPath) {
     const key = objectKeyFromStoredPath(storedPath)
     if (!key) return ""
@@ -67,7 +88,9 @@ export function publicUrlForStoredPath(req, storedPath) {
         const base = publicBaseUrlForS3Assets()
         return `${base}/${encodeKeySegments(key)}`
     }
-    return `${req.protocol}://${req.get("host")}/${key}`
+    const baseUrl = publicBaseUrlLocalUploads(req)
+    if (!baseUrl) return ""
+    return `${baseUrl}/${encodeKeySegments(key)}`
 }
 
 export function resolveLocalAbsolutePath(storedPath) {

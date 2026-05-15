@@ -1500,6 +1500,25 @@ export async function getDeletedGalleryMediaTrashListing(req, opts = {}) {
             }
         }
 
+        const origName = String(row.originalFilename || "").trim()
+        const mimeLower = String(row.mimeType || "").toLowerCase()
+
+        let previewUrl = ""
+        if (row.kind === "raw") {
+            const pathForPreview = row.displayFilePath || row.filePath
+            previewUrl = pathForPreview
+                ? buildPublicAssetUrl(req, pathForPreview)
+                : ""
+        } else if (row.kind === "final" && row.filePath) {
+            previewUrl = buildPublicAssetUrl(req, row.filePath)
+        }
+
+        const canShowImageThumbnail =
+            mimeLower.startsWith("image/") ||
+            /\.(jpe?g|png|gif|webp|heic|heif|tif|bmp|dng|arw|cr2|cr3|nef|orf|rw2)$/i.test(
+                origName
+            )
+
         return {
             mediaId: row._id,
             folderId: row.folderDoc._id,
@@ -1511,6 +1530,13 @@ export async function getDeletedGalleryMediaTrashListing(req, opts = {}) {
             deletedAt: Number.isNaN(d.getTime()) ? null : d.toISOString(),
             restoreBefore: restoreDeadlineISO(d),
             restorable: isWithinRestoreWindow(d),
+            previewUrl,
+            originalFilename: origName,
+            displayName:
+                origName ||
+                `${String(row._id).slice(-12)}.${String(row.mimeType || "file").split("/").pop()}`,
+            mimeType: row.mimeType || "",
+            canShowImageThumbnail,
             item,
         }
     })
