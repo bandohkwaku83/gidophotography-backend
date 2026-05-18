@@ -99,23 +99,59 @@ function toLocalDateTime(ymd, minutesFromMidnight) {
 
 /**
  * Resolve startsAt from body: explicit ISO `startsAt`, or `date` + `start` / `startTime`.
+ * When updating, pass `previousStartsAt` so a changed time or date alone can be merged
+ * (do not merge the full document into body — old `startsAt` would shadow new fields).
+ * @param {object} body Request JSON only (not merged with existing doc).
+ * @param {Date | null} [previousStartsAt]
  * @returns {Date | null}
  */
-function resolveStartsAt(body) {
-    if (body.startsAt) {
-        const d = new Date(body.startsAt)
+function resolveStartsAt(body, previousStartsAt = null) {
+    const hasExplicit = Object.prototype.hasOwnProperty.call(body, "startsAt")
+    if (hasExplicit) {
+        const raw = body.startsAt
+        if (raw == null || raw === "") return null
+        const d = new Date(raw)
         return Number.isNaN(d.getTime()) ? null : d
     }
+
     const datePart = parseDateInput(body.date ?? body.eventDate)
     const startRaw = body.start ?? body.startTime
     const mins = parseTimeToMinutes(startRaw)
-    if (!datePart || mins == null) return null
-    return toLocalDateTime(datePart, mins)
+
+    if (datePart != null && mins != null) {
+        return toLocalDateTime(datePart, mins)
+    }
+    if (previousStartsAt != null && mins != null) {
+        const s =
+            previousStartsAt instanceof Date
+                ? previousStartsAt
+                : new Date(previousStartsAt)
+        if (Number.isNaN(s.getTime())) return null
+        const ymd = {
+            y: s.getFullYear(),
+            m: s.getMonth() + 1,
+            d: s.getDate(),
+        }
+        return toLocalDateTime(ymd, mins)
+    }
+    if (datePart != null && previousStartsAt != null) {
+        const s =
+            previousStartsAt instanceof Date
+                ? previousStartsAt
+                : new Date(previousStartsAt)
+        if (Number.isNaN(s.getTime())) return null
+        const carryMins = s.getHours() * 60 + s.getMinutes()
+        return toLocalDateTime(datePart, carryMins)
+    }
+    return null
 }
 
 function resolveEndsAt(body, startsAt) {
-    if (body.endsAt) {
-        const d = new Date(body.endsAt)
+    const hasExplicit = Object.prototype.hasOwnProperty.call(body, "endsAt")
+    if (hasExplicit) {
+        const raw = body.endsAt
+        if (raw == null || raw === "") return null
+        const d = new Date(raw)
         return Number.isNaN(d.getTime()) ? null : d
     }
     const datePart =
@@ -159,6 +195,7 @@ export const getBookingMeta = async (req, res) => {
             label: id,
             color: colorForType(id),
         }))
+        res.set("Cache-Control", "private, no-store")
         return res.status(200).json({
             shootTypes,
             legend: shootTypes,
@@ -189,6 +226,7 @@ export const getBookingsWeekSummary = async (req, res) => {
             createdBy: req.user._id,
             startsAt: { $gte: start, $lte: end },
         })
+        res.set("Cache-Control", "private, no-store")
         return res.status(200).json({
             bookedCount: count,
             weekStartsAt: start,
@@ -258,6 +296,7 @@ export const listBookings = async (req, res) => {
             .sort({ startsAt: 1 })
             .lean()
 
+        res.set("Cache-Control", "private, no-store")
         return res.status(200).json({
             count: bookings.length,
             bookings: bookings.map((b) => serializeBooking(b)),
@@ -301,7 +340,7 @@ export const createBooking = async (req, res) => {
             })
         }
 
-        const startsAt = resolveStartsAt(body)
+        const startsAt = resolveStartsAt(body, null)
         if (!startsAt) {
             return res.status(400).json({
                 message:
@@ -348,6 +387,7 @@ export const getBooking = async (req, res) => {
         if (!doc || String(doc.createdBy) !== String(req.user._id)) {
             return res.status(404).json({ message: "Booking not found" })
         }
+        res.set("Cache-Control", "private, no-store")
         return res.status(200).json({ booking: serializeBooking(doc) })
     } catch (error) {
         console.error("Get booking error:", error)
@@ -368,10 +408,6 @@ export const updateBooking = async (req, res) => {
         }
 
         const body = req.body || {}
-        const flat = {
-            ...merged.toObject(),
-            ...body,
-        }
 
         const updates = {}
 
@@ -404,7 +440,7 @@ export const updateBooking = async (req, res) => {
             body.startTime !== undefined
 
         if (wantsStartChange) {
-            const nextStarts = resolveStartsAt(flat)
+            const nextStarts = resolveStartsAt(body, merged.startsAt)
             if (!nextStarts) {
                 return res.status(400).json({
                     message:
@@ -442,7 +478,7 @@ export const updateBooking = async (req, res) => {
                 endRaw !== null &&
                 String(endRaw).trim() !== ""
             ) {
-                updates.endsAt = resolveEndsAt(flat, startRef)
+                updates.endsAt = resolveEndsAt(body, startRef)
             } else {
                 updates.endsAt = null
             }
