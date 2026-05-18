@@ -5,6 +5,7 @@ export const BOOKING_SHOOT_TYPES = [
     "Outdoor",
     "Birthday",
     "Graduation",
+    "Christening",
     "Commercial",
     "Other",
 ]
@@ -16,6 +17,7 @@ export const BOOKING_SHOOT_TYPE_COLORS = {
     Outdoor: "green",
     Birthday: "pink",
     Graduation: "blue",
+    Christening: "teal",
     Commercial: "orange",
     Other: "sky",
 }

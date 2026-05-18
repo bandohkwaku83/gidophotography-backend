@@ -581,7 +581,7 @@
 							"query": [
 								{ "key": "year", "value": "2026", "description": "Use with month for calendar grid." },
 								{ "key": "month", "value": "5", "description": "1–12" },
-								{ "key": "type", "value": "", "description": "Optional: Wedding | Portraits | Outdoor | Birthday | Graduation | Commercial | Other" },
+								{ "key": "type", "value": "", "description": "Optional: Wedding | Portraits | Outdoor | Birthday | Graduation | Christening | Commercial | Other" },
 								{ "key": "from", "value": "", "description": "Alternative: ISO range with to= (omit year/month)." },
 								{ "key": "to", "value": "", "description": "ISO end date/time." }
 							]
