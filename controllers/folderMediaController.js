@@ -41,6 +41,7 @@ import {
     isRasterImageMime,
     isVideoMime,
 } from "../utils/finalLockedPreview.js"
+import { finalizeRasterThumbnail } from "../utils/mediaThumbnail.js"
 import {
     notifyAdminsOfFolderSelection,
     notifyAdminsOfFinalDownload,
@@ -62,10 +63,14 @@ export const serializeRawUpload = (req, doc, opts = {}) => {
     const displayUrl = doc.displayFilePath
         ? buildPublicUrl(req, doc.displayFilePath)
         : ""
+    const thumbUrl = doc.thumbPath
+        ? buildPublicUrl(req, doc.thumbPath)
+        : ""
     const useDisplay = maskOriginalWithDisplay && displayUrl
     const out = {
         _id: doc._id,
         url: useDisplay ? displayUrl : originalUrl,
+        thumbUrl,
         originalFilename: doc.originalFilename,
         mimeType: doc.mimeType,
         size: doc.size,
@@ -97,6 +102,7 @@ export const serializeSelection = (req, doc, opts = {}) => {
 export const serializeFinal = (req, doc) => ({
     _id: doc._id,
     url: buildPublicUrl(req, doc.filePath),
+    thumbUrl: doc.thumbPath ? buildPublicUrl(req, doc.thumbPath) : "",
     originalFilename: doc.originalFilename,
     mimeType: doc.mimeType,
     size: doc.size,
@@ -112,6 +118,7 @@ export const serializePublicFinal = (req, identifier, f, opts = {}) => {
         return {
             ...f,
             url: `${host}/api/share/${ident}/finals/${f._id}/locked-preview`,
+            thumbUrl: "",
             locked: true,
             rightsNote:
                 "Payment lock: downloads are disabled and only watermarked previews are available. True screenshot prevention is not possible over HTTP; the gallery app should add UX mitigations (e.g. overlays, blur, user education).",
@@ -149,10 +156,10 @@ export const getFolderMediaCollections = async (
     { clientGallery = false } = {}
 ) => {
     const rawSelect =
-        "_id filePath displayFilePath originalFilename mimeType size createdAt"
+        "_id filePath displayFilePath thumbPath originalFilename mimeType size createdAt"
     const selectionSelect = "_id editStatus rawMediaId createdAt updatedAt"
     const finalSelect =
-        "_id filePath originalFilename mimeType size selectionMediaId createdAt"
+        "_id filePath thumbPath originalFilename mimeType size selectionMediaId createdAt"
 
     const [rawDocs, selectionDocs, finalDocs] = await Promise.all([
         FolderMedia.find({ folder: folderId, kind: "raw", ...ACTIVE_MEDIA_MATCH })
@@ -191,9 +198,14 @@ const rollbackCreatedMedia = async (created) => {
         if (isObjectStorageS3()) {
             await deleteStoredAsset(doc.filePath)
             if (doc.displayFilePath) await deleteStoredAsset(doc.displayFilePath)
+            if (doc.thumbPath) await deleteStoredAsset(doc.thumbPath)
         } else {
             unlinkLocalTempFile(diskPath)
             unlinkLocalTempFile(displayDiskPath)
+            if (doc.thumbPath) {
+                const t = resolveLocalAbsolutePath(doc.thumbPath)
+                unlinkLocalTempFile(t)
+            }
         }
         await FolderMedia.deleteOne({ _id: doc._id }).catch(() => {})
     }
@@ -203,6 +215,11 @@ const rollbackCreatedMedia = async (created) => {
 async function replaceExistingRawMedia(req, existingDoc, f, folderId, watermarkOn) {
     const oldMain = existingDoc.filePath
     const oldDisp = existingDoc.displayFilePath || ""
+
+    if (existingDoc.thumbPath) {
+        await deleteStoredAsset(existingDoc.thumbPath)
+        existingDoc.thumbPath = ""
+    }
 
     const newMainPath = path.posix.join(
         "uploads",
@@ -242,6 +259,13 @@ async function replaceExistingRawMedia(req, existingDoc, f, folderId, watermarkO
     existingDoc.mimeType = f.mimetype
     existingDoc.size = f.size
 
+    await finalizeRasterThumbnail(
+        existingDoc,
+        f,
+        watermarkOn,
+        displayDiskPath
+    )
+
     if (isObjectStorageS3()) {
         await uploadLocalFileThenRemove(f.path, newMainPath, existingDoc.mimeType)
         if (existingDoc.displayFilePath && displayDiskPath) {
@@ -277,6 +301,11 @@ async function replaceExistingFinalMedia(
         path.basename(f.path)
     )
 
+    if (existingDoc.thumbPath) {
+        await deleteStoredAsset(existingDoc.thumbPath)
+        existingDoc.thumbPath = ""
+    }
+
     existingDoc.filePath = newPath
     existingDoc.originalFilename = f.originalname
     existingDoc.mimeType = f.mimetype
@@ -284,6 +313,8 @@ async function replaceExistingFinalMedia(
     if (selectionMediaIdUpdate !== undefined) {
         existingDoc.selectionMediaId = selectionMediaIdUpdate
     }
+
+    await finalizeRasterThumbnail(existingDoc, f, false, undefined)
 
     if (isObjectStorageS3()) {
         await uploadLocalFileThenRemove(f.path, newPath, f.mimetype)
@@ -453,6 +484,14 @@ export const uploadRawMedia = async (req, res) => {
                     )
                 }
             }
+
+            await finalizeRasterThumbnail(
+                doc,
+                f,
+                watermarkOn,
+                row.displayDiskPath
+            )
+            await doc.save()
 
             if (isObjectStorageS3()) {
                 await uploadLocalFileThenRemove(f.path, doc.filePath, doc.mimeType)
@@ -656,6 +695,8 @@ export const uploadFinalMedia = async (req, res) => {
                 selectionMediaId: selectionRef,
             })
             created.push({ doc, diskPath: f.path })
+            await finalizeRasterThumbnail(doc, f, false, undefined)
+            await doc.save()
             if (isObjectStorageS3()) {
                 await uploadLocalFileThenRemove(f.path, filePath, doc.mimeType)
             }
@@ -1379,8 +1420,10 @@ export async function hardRemoveMediaDocument(doc) {
     if (doc.kind === "raw") {
         await deleteStoredAsset(doc.filePath)
         await deleteStoredAsset(doc.displayFilePath)
+        await deleteStoredAsset(doc.thumbPath)
     } else if (doc.kind === "final") {
         await deleteStoredAsset(doc.filePath)
+        await deleteStoredAsset(doc.thumbPath)
     }
     await FolderMedia.deleteOne({ _id: doc._id }).catch(() => {})
 }
@@ -1392,6 +1435,7 @@ export async function purgeFolderMediaAssetsAndDocuments(folderId) {
         if (doc.kind === "raw" || doc.kind === "final") {
             await deleteStoredAsset(doc.filePath)
             if (doc.kind === "raw") await deleteStoredAsset(doc.displayFilePath)
+            await deleteStoredAsset(doc.thumbPath)
         }
     }
     await FolderMedia.deleteMany({ folder: folderId })
@@ -1505,12 +1549,15 @@ export async function getDeletedGalleryMediaTrashListing(req, opts = {}) {
 
         let previewUrl = ""
         if (row.kind === "raw") {
-            const pathForPreview = row.displayFilePath || row.filePath
+            const pathForPreview =
+                row.thumbPath || row.displayFilePath || row.filePath
             previewUrl = pathForPreview
                 ? buildPublicAssetUrl(req, pathForPreview)
                 : ""
         } else if (row.kind === "final" && row.filePath) {
-            previewUrl = buildPublicAssetUrl(req, row.filePath)
+            previewUrl = row.thumbPath
+                ? buildPublicAssetUrl(req, row.thumbPath)
+                : buildPublicAssetUrl(req, row.filePath)
         }
 
         const canShowImageThumbnail =

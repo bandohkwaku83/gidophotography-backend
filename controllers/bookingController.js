@@ -375,7 +375,13 @@ export const updateBooking = async (req, res) => {
 
         const updates = {}
 
-        if (body.title !== undefined) updates.title = String(body.title).trim()
+        if (body.title !== undefined) {
+            const t = String(body.title).trim()
+            if (!t) {
+                return res.status(400).json({ message: "title cannot be empty" })
+            }
+            updates.title = t
+        }
         if (body.location !== undefined)
             updates.location = String(body.location ?? "").trim()
         if (body.description !== undefined)
@@ -511,14 +517,20 @@ export const deleteBooking = async (req, res) => {
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ message: "Invalid booking id" })
         }
-        const doc = await Booking.findOneAndDelete({
+        const doc = await Booking.findOne({
             _id: id,
             createdBy: req.user._id,
-        })
+        }).populate(CLIENT_POPULATE)
         if (!doc) {
             return res.status(404).json({ message: "Booking not found" })
         }
-        return res.status(200).json({ message: "Booking deleted" })
+        const snapshot = serializeBooking(doc)
+        await doc.deleteOne()
+        return res.status(200).json({
+            message: "Booking deleted",
+            deletedId: String(doc._id),
+            booking: snapshot,
+        })
     } catch (error) {
         console.error("Delete booking error:", error)
         return res.status(500).json({ message: "Server error" })

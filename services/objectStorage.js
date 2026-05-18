@@ -22,6 +22,11 @@ const s3HttpsAgent = new https.Agent({
     maxSockets: s3MaxSockets,
 })
 
+/** Browser + CDN caching for uploaded gallery assets (immutable keys). Override via S3_OBJECT_CACHE_CONTROL. */
+const s3UploadCacheControl =
+    process.env.S3_OBJECT_CACHE_CONTROL?.trim() ||
+    "public, max-age=31536000, immutable"
+
 export function isObjectStorageS3() {
     const driver = String(process.env.STORAGE_DRIVER || "")
         .toLowerCase()
@@ -149,6 +154,7 @@ export async function uploadLocalFileThenRemove(
             Body: stream,
             ContentLength: stat.size,
             ContentType: contentType || "application/octet-stream",
+            CacheControl: s3UploadCacheControl,
         })
     )
     await fs.promises.unlink(localAbsolutePath).catch(() => {})

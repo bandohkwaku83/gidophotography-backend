@@ -25,6 +25,11 @@ const folderMediaSchema = new mongoose.Schema(
             type: String,
             default: "",
         },
+        /** WebP thumbnail (e.g. max 800px edge); grid/list URLs should prefer this over `filePath`. */
+        thumbPath: {
+            type: String,
+            default: "",
+        },
         originalFilename: {
             type: String,
             default: "",

@@ -20,6 +20,7 @@ router.get("/", listBookings)
 router.post("/", createBooking)
 router.get("/:id", getBooking)
 router.put("/:id", updateBooking)
+router.patch("/:id", updateBooking)
 router.delete("/:id", deleteBooking)
 
 export default router

@@ -1,7 +1,7 @@
 {
 	"info": {
 		"name": "GidoStorage Backend",
-		"description": "Auth, clients, bookings (calendar), folders, dashboard, settings, share (public), SMS (Arkesel), in-app notifications (admin). Bookings: GET /api/bookings/meta, summary/week, list ?year=&month=, CRUD /api/bookings. Unpaid final SMS defaults, final-delivery upload fields, PATCH .../final-delivery/lock (lock finals anytime) and .../unlock. Raw watermarking when settings.watermarkPreviewImages is true. Notifications: GET/PATCH /api/notifications (role admin).",
+		"description": "Auth, clients, bookings (calendar / schedule), folders, dashboard, settings, share (public), SMS (Arkesel), in-app notifications (admin). Bookings: GET /api/bookings/meta, summary/week, list ?year=&month=, POST create, GET one, PUT or PATCH edit (partial), DELETE remove. Unpaid final SMS defaults, final-delivery upload fields, PATCH .../final-delivery/lock (lock finals anytime) and .../unlock. Raw watermarking when settings.watermarkPreviewImages is true. Notifications: GET/PATCH /api/notifications (role admin).",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
@@ -640,7 +640,7 @@
 					}
 				},
 				{
-					"name": "Update booking",
+					"name": "Update booking (edit schedule)",
 					"request": {
 						"method": "PUT",
 						"header": [
@@ -649,17 +649,38 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n    \"title\": \"Styled editorial (updated)\"\n}"
+							"raw": "{\n    \"title\": \"Styled editorial (updated)\",\n    \"date\": \"2026-05-30\",\n    \"start\": \"10:00 AM\",\n    \"end\": \"12:30 PM\",\n    \"shootType\": \"Portraits\",\n    \"location\": \"New studio\",\n    \"description\": \"Rescheduled\",\n    \"clientId\": \"{{clientId}}\"\n}"
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/bookings/{{bookingId}}",
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "bookings", "{{bookingId}}"]
-						}
+						},
+						"description": "Full or partial update (send only fields to change). Same rules as create for date/start/end or startsAt/endsAt ISO. Changing startsAt clears booking reminder SMS / in-app flags so reminders can fire again for the new time. Use endsAt: null or end: \"\" to clear end time. Also available: PATCH (identical handler) for clients that prefer partial updates."
 					}
 				},
 				{
-					"name": "Delete booking",
+					"name": "Patch booking (partial edit)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"title\": \"Quick title-only change\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/bookings/{{bookingId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "bookings", "{{bookingId}}"]
+						},
+						"description": "Same validation as PUT; use for partial JSON bodies."
+					}
+				},
+				{
+					"name": "Delete booking (remove from schedule)",
 					"request": {
 						"method": "DELETE",
 						"header": [
@@ -669,7 +690,8 @@
 							"raw": "{{baseUrl}}/api/bookings/{{bookingId}}",
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "bookings", "{{bookingId}}"]
-						}
+						},
+						"description": "Permanently removes the booking for the logged-in creator. Response: message, deletedId, booking (last snapshot for UI cache)."
 					}
 				}
 			]
