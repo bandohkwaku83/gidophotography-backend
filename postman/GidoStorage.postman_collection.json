@@ -954,7 +954,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "folders", "{{folderId}}", "share"]
 						},
-						"description": "Updates link expiry and/or slug without changing the share code. Body examples: { \"linkExpiry\": \"never\" }, { \"linkExpiry\": \"90d\" }, { \"expiresAt\": \"...\" }, { \"slug\": \"my-wedding\" }, { \"selectionLocked\": false, \"clearSelectionSubmit\": true } to let the client edit picks again."
+						"description": "Updates share settings. Body examples: { \"linkExpiry\": \"30d\" }, { \"slug\": \"my-wedding\" }, { \"selectionLocked\": false, \"clearSelectionSubmit\": true }, { \"maxClientSelections\": 20 } (limit client picks), { \"maxClientSelections\": null } or 0 (unlimited). Response folder matches GET /api/folders/:id (includes uploads, selection, finals, sets)."
 					}
 				},
 				{
@@ -975,6 +975,46 @@
 							"path": ["api", "folders", "{{folderId}}", "share"]
 						},
 						"description": "After a client clicks Submit Selection, use this so they can change picks again (optional)."
+					}
+				},
+				{
+					"name": "Set client selection limit (admin)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"maxClientSelections\": 20\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/share",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "share"]
+						},
+						"description": "Limits how many photos a client can select in the share gallery. Validation: null, 0, or omit field on PATCH with only other keys = unlimited; 1–9999 = max picks. Response includes full folder (same shape as GET folder) with folder.share.maxClientSelections and top-level maxClientSelections."
+					}
+				},
+				{
+					"name": "Clear client selection limit (admin)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"maxClientSelections\": null\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/share",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "share"]
+						},
+						"description": "Removes the client selection cap (unlimited picks)."
 					}
 				},
 				{
@@ -1062,7 +1102,77 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "folders", "{{folderId}}"]
 						},
-						"description": "Returns folder details plus uploads (raw originals), selection (client picks with editStatus), and finals. Each upload item: url = original file; when watermark previews are enabled and the server generated a preview, displayUrl = watermarked JPEG. selection[].raw mirrors the same url/displayUrl shape for the linked raw."
+						"description": "Returns folder details plus uploads, selection, finals, and set metadata. share.maxClientSelections (and top-level maxClientSelections): null = unlimited, number = max client picks. Each media item includes setId. Also includes uploadsBySet, selectionBySet, finalsBySet buckets (with General for uncategorized) plus set counts: rawCount, selectionCount, finalCount."
+					}
+				},
+				{
+					"name": "List folder sets (admin)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/sets",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "sets"]
+						},
+						"description": "Returns all active sets for the folder with per-set counts (rawCount, selectionCount, finalCount) plus General counts and totals."
+					}
+				},
+				{
+					"name": "Create folder set (admin)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Reception\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/sets",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "sets"]
+						},
+						"description": "Creates a sub-gallery set inside the folder (e.g. Traditional, Knocking, Reception). Name is unique per folder (case-insensitive)."
+					}
+				},
+				{
+					"name": "Update folder set (admin)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"name\": \"Reception\",\n    \"sortOrder\": 2\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/sets/{{setId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "sets", "{{setId}}"]
+						},
+						"description": "Renames/reorders a set. Pass any subset of fields."
+					}
+				},
+				{
+					"name": "Delete folder set (admin)",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/sets/{{setId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "sets", "{{setId}}"]
+						},
+						"description": "Soft-deletes a set and moves its linked media to General (setId = null)."
 					}
 				},
 				{
@@ -1075,14 +1185,14 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n    \"kind\": \"raw\",\n    \"filenames\": [\"IMG_001.jpg\", \"photo.cr3\"]\n}"
+							"raw": "{\n    \"kind\": \"raw\",\n    \"setId\": \"{{setId}}\",\n    \"filenames\": [\"IMG_001.jpg\", \"photo.cr3\"]\n}"
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/folders/{{folderId}}/media/duplicate-preview",
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "folders", "{{folderId}}", "media", "duplicate-preview"]
 						},
-						"description": "Sends kind + filenames[] (e.g. every file.name before a big batch). Uses batched DB queries (not one query per file). Response: hasConflicts, conflicts[], truncated (true if filenames exceeded maxFilenames), maxFilenames (5000). If nginx still returns 504, raise proxy_read_timeout. JSON body limit on API is 12mb for this route class."
+						"description": "Sends kind + filenames[] (e.g. every file.name before a big batch). Optional setId scopes duplicate checks to a specific set for raw/final uploads. Uses batched DB queries (not one query per file). Response: hasConflicts, conflicts[], truncated, maxFilenames."
 					}
 				},
 				{
@@ -1113,6 +1223,7 @@
 							"mode": "formdata",
 							"formdata": [
 								{ "key": "files", "type": "file", "src": [], "description": "Pick many images at once (key: files). Max 1000 files per request; per-file max defaults to 500MB (FOLDER_MAX_UPLOAD_MB in .env)." },
+								{ "key": "setId", "value": "{{setId}}", "type": "text", "description": "Optional. Upload into a specific set. Omit (or send null/general/none) to upload into General." },
 								{ "key": "duplicateAction", "value": "ignore", "type": "text", "description": "Set from duplicate popup only: replace overwrites same-named raws; ignore skips them (omit defaults to ignore)." },
 								{ "key": "uploadComplete", "value": "", "type": "text", "description": "Omit = SMS after this batch (legacy). For split uploads: false on batches 1..N-1, true (or omit if SMS_UPLOAD_NOTIFY_REQUIRE_EXPLICIT_COMPLETE is false) on the LAST batch only. If SMS_UPLOAD_NOTIFY_REQUIRE_EXPLICIT_COMPLETE=true on server, omit = no SMS — send true on final batch." }
 							]
@@ -1122,7 +1233,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "folders", "{{folderId}}", "media", "raw"]
 						},
-						"description": "Batch raw upload. Popup UX: POST .../media/duplicate-preview with filenames first; if hasConflicts, ask user then upload with duplicateAction replace | ignore. Client SMS: use uploadComplete=false on every HTTP batch except the last (then true or omit) so only one SMS sends after all batches; or set SMS_UPLOAD_NOTIFY_REQUIRE_EXPLICIT_COMPLETE=true on the server and always send uploadComplete=true on the last batch only. Multiple quick requests with notify still coalesce via SMS_UPLOAD_NOTIFY_DEBOUNCE_MS (default 8s, max 300s)."
+						"description": "Batch raw upload. Optional setId stores uploaded raws under a specific set. Popup UX: POST .../media/duplicate-preview (optionally with setId) first; if hasConflicts, ask user then upload with duplicateAction replace | ignore."
 					}
 				},
 				{
@@ -1182,6 +1293,7 @@
 							"mode": "formdata",
 							"formdata": [
 								{ "key": "files", "type": "file", "src": [], "description": "One or many finals (same field rules as raw). Omit selectionMediaId when uploading multiple." },
+								{ "key": "setId", "value": "{{setId}}", "type": "text", "description": "Optional. Assign finals to a specific set. If omitted and selectionMediaId is provided, setId inherits from that selection." },
 								{ "key": "duplicateAction", "value": "ignore", "type": "text", "description": "From duplicate popup: replace overwrites same-named finals; ignore skips." },
 								{ "key": "selectionMediaId", "value": "{{selectionMediaId}}", "type": "text", "description": "Optional, single-file uploads only. Link this final to a client selection _id." },
 								{ "key": "uploadComplete", "value": "", "type": "text", "description": "Split uploads: false on intermediate batches; true or omit on final (unless SMS_UPLOAD_NOTIFY_REQUIRE_EXPLICIT_COMPLETE=true — then send true on last batch only)." },
@@ -1195,7 +1307,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "folders", "{{folderId}}", "media", "final"]
 						},
-						"description": "selectionMediaId only when uploading exactly one file. Popup UX: duplicate-preview first; then duplicateAction from modal. Response includes createdCount, replacedCount, ignoredDuplicates*, finalDelivery. Final SMS debounced: if folder has outstandingAmountGHS > 0 after this batch, SMS uses unpaid template (payment details + gallery link). uploadComplete=false on intermediate batches. smsNotifyScheduled."
+						"description": "selectionMediaId only when uploading exactly one file. Optional setId assigns finals to a set; if omitted with selectionMediaId, final inherits selection set. Popup UX: duplicate-preview first; then duplicateAction from modal."
 					}
 				},
 				{
@@ -1370,7 +1482,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "share", "{{shareIdentifier}}"]
 						},
-						"description": "Client gallery bootstrap: uploads, selection, finals, counts, canEditSelections, share.selectionLocked / selectionSubmittedAt, finalDelivery { outstandingAmountGHS, imagesLocked }, rightsProtection, backgroundMusicEnabled + backgroundMusicUrl (empty when disabled or no file). When finalDelivery.imagesLocked is true, finals[].url is GET .../locked-preview (watermarked JPEG), finals[].locked is true, and downloadUrl is omitted; GET .../download returns 403. When unlocked, each final includes downloadUrl. When watermarkPreviewImages is true and a raw preview exists, uploads[].url and selection[].raw.url use the watermarked JPEG."
+						"description": "Client gallery bootstrap: uploads, selection, finals, counts, canEditSelections, share.maxClientSelections (null = unlimited), share.selectionLocked / selectionSubmittedAt, finalDelivery { outstandingAmountGHS, imagesLocked }, rightsProtection, backgroundMusicEnabled + backgroundMusicUrl. When finalDelivery.imagesLocked is true, finals[].url is locked-preview. POST .../selections/sync returns 400 if rawMediaIds.length exceeds maxClientSelections; 403 when selectionLocked."
 					}
 				},
 				{
@@ -1426,7 +1538,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "share", "{{shareIdentifier}}", "selections", "sync"]
 						},
-						"description": "Replaces the client's picks with exactly this list of raw media ids (max 500). Returns selection[] with raw URLs following the same watermark rules as GET share."
+						"description": "Replaces the client's picks with exactly this list of raw media ids (max 500 per request). Enforces share.maxClientSelections when set (400 if list too long). Returns 403 when selectionLocked. Returns selection[] with raw URLs following the same watermark rules as GET share."
 					}
 				},
 				{

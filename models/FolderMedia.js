@@ -10,6 +10,13 @@ const folderMediaSchema = new mongoose.Schema(
             required: true,
             index: true,
         },
+        /** Optional sub-gallery (set) within the folder. */
+        set: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "FolderSet",
+            default: null,
+            index: true,
+        },
         kind: {
             type: String,
             enum: ["raw", "selection", "final"],

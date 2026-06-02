@@ -83,6 +83,8 @@ const folderSchema = new mongoose.Schema(
             sharedAt: { type: Date, default: null },
             selectionSubmittedAt: { type: Date, default: null },
             selectionLocked: { type: Boolean, default: false },
+            /** Max client picks; null = unlimited. */
+            maxClientSelections: { type: Number, default: null, min: 1, max: 9999 },
         },
         /** Final delivery payment / lock (admin multipart on final upload + manual unlock). */
         finalDelivery: {

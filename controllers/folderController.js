@@ -33,6 +33,10 @@ import {
     restoreDeadlineISO,
 } from "../utils/softDelete.js"
 import { parseAmount } from "../utils/finalDeliveryMultipart.js"
+import {
+    getEffectiveMaxClientSelections,
+    parseMaxClientSelectionsInput,
+} from "../utils/maxClientSelections.js"
 
 const SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/
 
@@ -93,8 +97,15 @@ const serializeFolder = (req, folder) => {
     const focalX = normalizeStoredFocal(obj.coverFocalX)
     const focalY = normalizeStoredFocal(obj.coverFocalY)
     const bgmOn = obj.backgroundMusicEnabled !== false
+    const maxClientSelections = getEffectiveMaxClientSelections(obj.share)
+    const share = {
+        ...(obj.share || {}),
+        maxClientSelections,
+    }
     return {
         ...obj,
+        share,
+        maxClientSelections,
         status: obj.status || "draft",
         coverImageUrl: buildPublicAssetUrl(req, obj.coverImage),
         backgroundMusicUrl:
@@ -107,6 +118,19 @@ const serializeFolder = (req, folder) => {
         coverFocalY: focalY,
         cover_focal_x: focalX,
         cover_focal_y: focalY,
+    }
+}
+
+async function buildFolderDetailPayload(req, folder) {
+    const media = await getFolderMediaCollections(req, folder._id)
+    const { listFolderSetsForFolder } = await import("./folderSetController.js")
+    const setsPayload = await listFolderSetsForFolder(folder._id)
+    return {
+        folder: {
+            ...serializeFolder(req, folder),
+            ...media,
+            ...setsPayload,
+        },
     }
 }
 
@@ -292,14 +316,7 @@ export const getFolder = async (req, res) => {
             return res.status(404).json({ message: "Folder not found" })
         }
 
-        const media = await getFolderMediaCollections(req, folder._id)
-
-        return res.status(200).json({
-            folder: {
-                ...serializeFolder(req, folder),
-                ...media,
-            },
-        })
+        return res.status(200).json(await buildFolderDetailPayload(req, folder))
     } catch (error) {
         console.error("Get folder error:", error)
         return res.status(500).json({ message: "Server error" })
@@ -725,15 +742,20 @@ export const patchFolderShare = async (req, res) => {
             Object.prototype.hasOwnProperty.call(body, "selectionLocked") ||
             body.clearSelectionSubmit === true ||
             body.clearSelectionSubmit === "true"
+        const hasMaxClientSelectionsInput = Object.prototype.hasOwnProperty.call(
+            body,
+            "maxClientSelections"
+        )
 
         if (
             !hasShareExpiryInput(body) &&
             !hasSlugInput &&
-            !hasClientSelectionAdminInput
+            !hasClientSelectionAdminInput &&
+            !hasMaxClientSelectionsInput
         ) {
             return res.status(400).json({
                 message:
-                    "Nothing to update. Send slug, linkExpiry / expiresAt, selectionLocked, or clearSelectionSubmit.",
+                    "Nothing to update. Send slug, linkExpiry / expiresAt, selectionLocked, maxClientSelections, or clearSelectionSubmit.",
             })
         }
 
@@ -747,6 +769,20 @@ export const patchFolderShare = async (req, res) => {
         }
         if (clearSelectionSubmit === true || clearSelectionSubmit === "true") {
             $set["share.selectionSubmittedAt"] = null
+        }
+
+        if (hasMaxClientSelectionsInput) {
+            const parsed = parseMaxClientSelectionsInput(body.maxClientSelections)
+            if (parsed.error) {
+                return res.status(400).json({ message: parsed.error })
+            }
+            if (!parsed.unchanged) {
+                if (parsed.value == null) {
+                    $set["share.maxClientSelections"] = null
+                } else {
+                    $set["share.maxClientSelections"] = parsed.value
+                }
+            }
         }
 
         if (slug !== undefined && slug !== "" && slug !== null) {
@@ -804,9 +840,10 @@ export const patchFolderShare = async (req, res) => {
             return res.status(404).json({ message: "Folder not found" })
         }
 
+        const payload = await buildFolderDetailPayload(req, populated)
         return res.status(200).json({
             message: "Share settings updated",
-            folder: serializeFolder(req, populated),
+            ...payload,
         })
     } catch (error) {
         console.error("Patch folder share error:", error)
@@ -966,11 +1003,19 @@ export const getSharedFolder = async (req, res) => {
         const media = await getFolderMediaCollections(req, folder._id, {
             clientGallery: Boolean(settings.watermarkPreviewImages),
         })
+        const { listFolderSetsForFolder } = await import("./folderSetController.js")
+        const setsPayload = await listFolderSetsForFolder(folder._id)
         const obj = folder.toObject()
         const imagesLocked = folderFinalImagesLocked(folder)
         const finals = media.finals.map((f) =>
             serializePublicFinal(req, identifier, f, { imagesLocked })
         )
+        const finalById = new Map(finals.map((f) => [String(f._id), f]))
+        const finalsBySet = (media.finalsBySet || []).map((bucket) => ({
+            ...bucket,
+            items: (bucket.items || []).map((f) => finalById.get(String(f._id)) || f),
+        }))
+        const maxClientSelections = getEffectiveMaxClientSelections(obj.share)
         const focalX = normalizeStoredFocal(obj.coverFocalX)
         const focalY = normalizeStoredFocal(obj.coverFocalY)
         const bgmEnabled = obj.backgroundMusicEnabled !== false
@@ -995,6 +1040,7 @@ export const getSharedFolder = async (req, res) => {
                 cover_focal_x: focalX,
                 cover_focal_y: focalY,
                 selectionSubmitted: Boolean(obj.share?.selectionSubmittedAt),
+                maxClientSelections,
                 share: {
                     slug: obj.share.slug,
                     code: obj.share.code,
@@ -1004,6 +1050,7 @@ export const getSharedFolder = async (req, res) => {
                     sharedAt: obj.share.sharedAt,
                     selectionSubmittedAt: obj.share.selectionSubmittedAt,
                     selectionLocked: Boolean(obj.share.selectionLocked),
+                    maxClientSelections,
                 },
                 canEditSelections: !obj.share.selectionLocked,
                 finalDelivery: {
@@ -1021,9 +1068,13 @@ export const getSharedFolder = async (req, res) => {
                     selected: media.selection.length,
                     finals: finals.length,
                 },
+                ...setsPayload,
                 uploads: media.uploads,
                 selection: media.selection,
                 finals,
+                uploadsBySet: media.uploadsBySet,
+                selectionBySet: media.selectionBySet,
+                finalsBySet,
             },
         })
     } catch (error) {

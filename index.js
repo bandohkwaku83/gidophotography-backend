@@ -97,7 +97,7 @@ app.use((err, req, res, next) => {
             LIMIT_PART_COUNT:
                 `Too many multipart parts in one request. Try splitting the upload or lowering FOLDER_MAX_FILES_PER_UPLOAD (current max files: ${folderUploadMaxFilesPerRequest}).`,
             LIMIT_UNEXPECTED_FILE:
-                'Use a supported file field name: "files" or "files[]" (recommended for many), or file, file[], photo, photos[], image, images[], video, videos[]. Text fields like selectionMediaId are allowed next to files.',
+                'Use a supported file field name: "files" or "files[]" (recommended for many), or file, file[], photo, photos[], image, images[]. Text fields like selectionMediaId are allowed next to files.',
         }
         return res.status(400).json({
             message: err.message,

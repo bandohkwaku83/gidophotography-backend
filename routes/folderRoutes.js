@@ -19,6 +19,12 @@ import {
     deleteFolderBackgroundMusic,
 } from "../controllers/folderController.js"
 import {
+    listFolderSets,
+    createFolderSet,
+    updateFolderSet,
+    deleteFolderSet,
+} from "../controllers/folderSetController.js"
+import {
     uploadRawMedia,
     uploadFinalMedia,
     previewUploadDuplicates,
@@ -53,6 +59,11 @@ router.get("/media/trash", listDeletedFolderMedia)
 
 router.post("/:id/restore", restoreFolder)
 router.post("/:id/media/:mediaId/restore", restoreFolderMedia)
+
+router.get("/:id/sets", listFolderSets)
+router.post("/:id/sets", createFolderSet)
+router.patch("/:id/sets/:setId", updateFolderSet)
+router.delete("/:id/sets/:setId", deleteFolderSet)
 
 router.post("/:id/media/duplicate-preview", previewUploadDuplicates)
 router.post("/:id/media/raw", uploadFolderRaw, uploadRawMedia)

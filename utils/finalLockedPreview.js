@@ -90,43 +90,6 @@ export async function pipeLockedFinalJpegToResponse(res, imageBuffer) {
     return true
 }
 
-const VIDEO_PLACEHOLDER_W = 1280
-const VIDEO_PLACEHOLDER_H = 720
-
-/**
- * When payment lock hides full finals, raster images get a frame from the file; videos cannot be
- * decoded here — serve the same locked watermark treatment on a neutral frame (matches raw preview UX).
- * @param {import("express").Response} res
- */
-export async function pipeLockedFinalVideoPlaceholderToResponse(res) {
-    const w = VIDEO_PLACEHOLDER_W
-    const h = VIDEO_PLACEHOLDER_H
-    const overlay = lockedOverlaySvg(w, h)
-    const buf = await sharp({
-        create: {
-            width: w,
-            height: h,
-            channels: 3,
-            background: { r: 28, g: 30, b: 36 },
-        },
-    })
-        .composite([{ input: overlay, blend: "over" }])
-        .jpeg({ quality: 82, mozjpeg: true })
-        .toBuffer()
-        .catch(() => null)
-
-    if (!buf) return false
-    res.setHeader("Content-Type", "image/jpeg")
-    res.setHeader("Cache-Control", "private, no-store")
-    res.setHeader("X-Content-Type-Options", "nosniff")
-    res.send(buf)
-    return true
-}
-
-export function isVideoMime(mime) {
-    return String(mime || "").toLowerCase().startsWith("video/")
-}
-
 export function isRasterImageMime(mime) {
     const m = String(mime || "").toLowerCase()
     return (

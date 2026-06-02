@@ -3,6 +3,7 @@ import path from "path"
 import mongoose from "mongoose"
 import Folder from "../models/Folder.js"
 import FolderMedia, { EDIT_STATUSES } from "../models/FolderMedia.js"
+import FolderSet from "../models/FolderSet.js"
 import { FOLDER_STATUS_VALUES } from "../constants/folderStatus.js"
 import { collectFolderUploadFiles, folderUploadMaxFilesPerRequest } from "../middleware/upload.js"
 import {
@@ -37,15 +38,18 @@ import {
 import { readFinalDeliveryPaymentFromReq } from "../utils/finalDeliveryMultipart.js"
 import {
     pipeLockedFinalJpegToResponse,
-    pipeLockedFinalVideoPlaceholderToResponse,
     isRasterImageMime,
-    isVideoMime,
 } from "../utils/finalLockedPreview.js"
 import { finalizeRasterThumbnail } from "../utils/mediaThumbnail.js"
 import {
     notifyAdminsOfFolderSelection,
     notifyAdminsOfFinalDownload,
 } from "../services/notificationService.js"
+import { parseSetIdInput } from "../utils/folderSetQuery.js"
+import {
+    getEffectiveMaxClientSelections,
+    selectionLimitExceededMessage,
+} from "../utils/maxClientSelections.js"
 import {
     ACTIVE_MEDIA_MATCH,
     getTrashRetentionDays,
@@ -75,6 +79,7 @@ export const serializeRawUpload = (req, doc, opts = {}) => {
         mimeType: doc.mimeType,
         size: doc.size,
         createdAt: doc.createdAt,
+        setId: doc.set ? String(doc.set) : null,
     }
     if (!maskOriginalWithDisplay && displayUrl) out.displayUrl = displayUrl
     return out
@@ -92,6 +97,10 @@ export const serializeSelection = (req, doc, opts = {}) => {
     return {
         _id: doc._id,
         editStatus: doc.editStatus,
+        setId:
+            doc.set != null
+                ? String(doc.set)
+                : rawObj?.setId ?? (doc.rawMediaId?.set ? String(doc.rawMediaId.set) : null),
         raw: rawObj,
         rawMediaId: doc.rawMediaId?._id || doc.rawMediaId,
         createdAt: doc.createdAt,
@@ -99,16 +108,25 @@ export const serializeSelection = (req, doc, opts = {}) => {
     }
 }
 
-export const serializeFinal = (req, doc) => ({
-    _id: doc._id,
-    url: buildPublicUrl(req, doc.filePath),
-    thumbUrl: doc.thumbPath ? buildPublicUrl(req, doc.thumbPath) : "",
-    originalFilename: doc.originalFilename,
-    mimeType: doc.mimeType,
-    size: doc.size,
-    selectionMediaId: doc.selectionMediaId || null,
-    createdAt: doc.createdAt,
-})
+export const serializeFinal = (req, doc) => {
+    const selSetId =
+        doc.selectionMediaId &&
+        typeof doc.selectionMediaId === "object" &&
+        doc.selectionMediaId.set
+            ? String(doc.selectionMediaId.set)
+            : null
+    return {
+        _id: doc._id,
+        url: buildPublicUrl(req, doc.filePath),
+        thumbUrl: doc.thumbPath ? buildPublicUrl(req, doc.thumbPath) : "",
+        originalFilename: doc.originalFilename,
+        mimeType: doc.mimeType,
+        size: doc.size,
+        selectionMediaId: doc.selectionMediaId?._id || doc.selectionMediaId || null,
+        setId: doc.set ? String(doc.set) : selSetId,
+        createdAt: doc.createdAt,
+    }
+}
 
 /** @param {{ imagesLocked?: boolean }} opts */
 export const serializePublicFinal = (req, identifier, f, opts = {}) => {
@@ -156,12 +174,14 @@ export const getFolderMediaCollections = async (
     { clientGallery = false } = {}
 ) => {
     const rawSelect =
-        "_id filePath displayFilePath thumbPath originalFilename mimeType size createdAt"
-    const selectionSelect = "_id editStatus rawMediaId createdAt updatedAt"
+        "_id set filePath displayFilePath thumbPath originalFilename mimeType size createdAt"
+    const selectionSelect = "_id set editStatus rawMediaId createdAt updatedAt"
     const finalSelect =
-        "_id filePath thumbPath originalFilename mimeType size selectionMediaId createdAt"
+        "_id set filePath thumbPath originalFilename mimeType size selectionMediaId createdAt"
 
-    const [rawDocs, selectionDocs, finalDocs] = await Promise.all([
+    const setSelect = "_id name sortOrder createdAt updatedAt"
+
+    const [rawDocs, selectionDocs, finalDocs, setDocs] = await Promise.all([
         FolderMedia.find({ folder: folderId, kind: "raw", ...ACTIVE_MEDIA_MATCH })
             .select(rawSelect)
             .sort({ createdAt: 1 })
@@ -178,18 +198,59 @@ export const getFolderMediaCollections = async (
         FolderMedia.find({ folder: folderId, kind: "final", ...ACTIVE_MEDIA_MATCH })
             .select(finalSelect)
             .sort({ createdAt: 1 })
+            .populate({
+                path: "selectionMediaId",
+                select: "_id set",
+                match: { ...ACTIVE_MEDIA_MATCH },
+            })
+            .lean(),
+        FolderSet.find({ folder: folderId, deletedAt: null })
+            .select(setSelect)
+            .sort({ sortOrder: 1, createdAt: 1 })
             .lean(),
     ])
 
     const rawOpts = { maskOriginalWithDisplay: clientGallery }
     const selOpts = { maskNestedRaw: clientGallery }
 
+    const uploads = rawDocs.map((d) => serializeRawUpload(req, d, rawOpts))
+    const selection = selectionDocs.map((d) => serializeSelection(req, d, selOpts))
+    const finals = finalDocs.map((d) => serializeFinal(req, d))
+
+    const buildBucket = (items) => {
+        const bySetId = new Map()
+        for (const s of setDocs) {
+            bySetId.set(String(s._id), {
+                setId: String(s._id),
+                name: s.name,
+                sortOrder: s.sortOrder ?? 0,
+                items: [],
+            })
+        }
+        const general = {
+            setId: null,
+            name: "General",
+            sortOrder: -1,
+            items: [],
+        }
+        for (const item of items) {
+            const sid = item?.setId ?? null
+            if (sid && bySetId.has(String(sid))) {
+                bySetId.get(String(sid)).items.push(item)
+            } else {
+                general.items.push(item)
+            }
+        }
+        return [general, ...[...bySetId.values()]]
+    }
+
     return {
-        uploads: rawDocs.map((d) => serializeRawUpload(req, d, rawOpts)),
-        selection: selectionDocs.map((d) =>
-            serializeSelection(req, d, selOpts)
-        ),
-        finals: finalDocs.map((d) => serializeFinal(req, d)),
+        uploads,
+        selection,
+        finals,
+        uploadsBySet: buildBucket(uploads),
+        selectionBySet: buildBucket(selection),
+        finalsBySet: buildBucket(finals),
     }
 }
 
@@ -285,12 +346,13 @@ async function replaceExistingRawMedia(req, existingDoc, f, folderId, watermarkO
     return existingDoc
 }
 
-/** Replace-in-place; optional selectionMediaIdUpdate only when caller passes a value. */
+/** Replace-in-place; optional selectionMediaId/set updates only when caller passes values. */
 async function replaceExistingFinalMedia(
     existingDoc,
     f,
     folderId,
-    selectionMediaIdUpdate
+    selectionMediaIdUpdate,
+    setIdUpdate
 ) {
     const oldPath = existingDoc.filePath
     const newPath = path.posix.join(
@@ -312,6 +374,9 @@ async function replaceExistingFinalMedia(
     existingDoc.size = f.size
     if (selectionMediaIdUpdate !== undefined) {
         existingDoc.selectionMediaId = selectionMediaIdUpdate
+    }
+    if (setIdUpdate !== undefined) {
+        existingDoc.set = setIdUpdate
     }
 
     await finalizeRasterThumbnail(existingDoc, f, false, undefined)
@@ -353,16 +418,37 @@ export const previewUploadDuplicates = async (req, res) => {
             })
         }
 
+        let setId = undefined
+        const parsed = parseSetIdInput(req.body?.setId ?? req.body?.set_id)
+        if (parsed === "__invalid__") {
+            return res.status(400).json({ message: "Invalid set id" })
+        }
+        if (kind === "raw" || kind === "final") {
+            setId = parsed
+            if (setId) {
+                const setDoc = await FolderSet.findOne({
+                    _id: setId,
+                    folder: id,
+                    deletedAt: null,
+                })
+                if (!setDoc) {
+                    return res.status(404).json({ message: "Set not found" })
+                }
+            }
+        }
+
         const { conflicts, truncated } = await findDuplicateFolderMediaBatch(
             FolderMedia,
             id,
             kind,
-            filenames
+            filenames,
+            setId
         )
 
         return res.status(200).json({
             folderId: id,
             kind,
+            setId: setId ?? null,
             hasConflicts: conflicts.length > 0,
             conflictCount: conflicts.length,
             conflicts,
@@ -387,7 +473,7 @@ export const uploadRawMedia = async (req, res) => {
         if (fileParts.length === 0) {
             return res.status(400).json({
                 message: "No files uploaded",
-                hint: `Use multipart/form-data with field "files" or "videos" (best for many items). Up to ${folderUploadMaxFilesPerRequest} files per request (FOLDER_MAX_FILES_PER_UPLOAD). Max size per file: FOLDER_MAX_UPLOAD_MB in .env (default 500MB). Images and videos are supported.`,
+                hint: `Use multipart/form-data with field "files" (best for many images). Up to ${folderUploadMaxFilesPerRequest} files per request (FOLDER_MAX_FILES_PER_UPLOAD). Max size per file: FOLDER_MAX_UPLOAD_MB in .env (default 500MB).`,
             })
         }
 
@@ -409,10 +495,29 @@ export const uploadRawMedia = async (req, res) => {
         const settings = await Settings.getSingleton()
         const watermarkOn = Boolean(settings.watermarkPreviewImages)
 
+        const parsedSetId = parseSetIdInput(req.body?.setId ?? req.body?.set_id)
+        if (parsedSetId === "__invalid__") {
+            for (const f of fileParts) unlinkLocalTempFile(f.path)
+            return res.status(400).json({ message: "Invalid set id" })
+        }
+        const uploadSetId = parsedSetId === undefined ? null : parsedSetId
+        if (uploadSetId) {
+            const setDoc = await FolderSet.findOne({
+                _id: uploadSetId,
+                folder: id,
+                deletedAt: null,
+            })
+            if (!setDoc) {
+                for (const f of fileParts) unlinkLocalTempFile(f.path)
+                return res.status(404).json({ message: "Set not found" })
+            }
+        }
+
         const dupByBasename = await loadFolderMediaByBasenameMap(
             FolderMedia,
             id,
-            "raw"
+            "raw",
+            uploadSetId
         )
 
         const ignoredDuplicates = []
@@ -454,6 +559,7 @@ export const uploadRawMedia = async (req, res) => {
             const doc = await FolderMedia.create({
                 folder: id,
                 kind: "raw",
+                set: uploadSetId,
                 filePath,
                 displayFilePath: "",
                 originalFilename: f.originalname,
@@ -521,7 +627,7 @@ export const uploadRawMedia = async (req, res) => {
         const totalDone = created.length + replacedDocs.length
         const msgParts = []
         if (totalDone > 0) {
-            msgParts.push(`Uploaded ${totalDone} file(s)`)
+            msgParts.push(`Uploaded ${totalDone} photo(s)`)
         }
         if (ignoredDuplicates.length > 0) {
             msgParts.push(`${ignoredDuplicates.length} duplicate(s) skipped`)
@@ -562,6 +668,11 @@ export const uploadFinalMedia = async (req, res) => {
         const selectionMediaId = mongoose.Types.ObjectId.isValid(trimmedSel)
             ? trimmedSel
             : null
+        const parsedSetId = parseSetIdInput(req.body?.setId ?? req.body?.set_id)
+        if (parsedSetId === "__invalid__") {
+            for (const f of fileParts) unlinkLocalTempFile(f.path)
+            return res.status(400).json({ message: "Invalid set id" })
+        }
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
             for (const f of fileParts) unlinkLocalTempFile(f.path)
@@ -570,7 +681,7 @@ export const uploadFinalMedia = async (req, res) => {
         if (fileParts.length === 0) {
             return res.status(400).json({
                 message: "No files uploaded",
-                hint: `Same as raw uploads: use field "files", "videos", or "file", etc. Up to ${folderUploadMaxFilesPerRequest} files per request (FOLDER_MAX_FILES_PER_UPLOAD). Max file size: FOLDER_MAX_UPLOAD_MB in .env (default 500MB). Images and videos are supported.`,
+                hint: `Same as raw uploads: use field "files" or "file", etc. Up to ${folderUploadMaxFilesPerRequest} files per request (FOLDER_MAX_FILES_PER_UPLOAD). Max file size: FOLDER_MAX_UPLOAD_MB in .env (default 500MB).`,
             })
         }
 
@@ -623,6 +734,7 @@ export const uploadFinalMedia = async (req, res) => {
         }
 
         let selectionRef = null
+        let selectionSetId = undefined
         if (selectionMediaId) {
             if (fileParts.length > 1) {
                 for (const f of fileParts) unlinkLocalTempFile(f.path)
@@ -636,12 +748,27 @@ export const uploadFinalMedia = async (req, res) => {
                 folder: id,
                 kind: "selection",
                 ...ACTIVE_MEDIA_MATCH,
-            })
+            }).select("_id set rawMediaId")
             if (!sel) {
                 for (const f of fileParts) unlinkLocalTempFile(f.path)
                 return res.status(404).json({ message: "Selection not found" })
             }
             selectionRef = sel._id
+            selectionSetId = sel.set ?? null
+        }
+
+        const uploadSetId =
+            parsedSetId === undefined ? (selectionSetId ?? null) : parsedSetId
+        if (uploadSetId) {
+            const setDoc = await FolderSet.findOne({
+                _id: uploadSetId,
+                folder: id,
+                deletedAt: null,
+            })
+            if (!setDoc) {
+                for (const f of fileParts) unlinkLocalTempFile(f.path)
+                return res.status(404).json({ message: "Set not found" })
+            }
         }
 
         const ignoredDuplicates = []
@@ -655,7 +782,8 @@ export const uploadFinalMedia = async (req, res) => {
         const dupByBasename = await loadFolderMediaByBasenameMap(
             FolderMedia,
             id,
-            "final"
+            "final",
+            uploadSetId
         )
 
         for (const f of fileParts) {
@@ -671,7 +799,8 @@ export const uploadFinalMedia = async (req, res) => {
                     existing,
                     f,
                     id,
-                    selUpdate
+                    selUpdate,
+                    uploadSetId
                 )
                 replacedDocs.push(doc)
                 mediaOut.push(serializeFinal(req, doc))
@@ -688,6 +817,7 @@ export const uploadFinalMedia = async (req, res) => {
             const doc = await FolderMedia.create({
                 folder: id,
                 kind: "final",
+                set: uploadSetId,
                 filePath,
                 originalFilename: f.originalname,
                 mimeType: f.mimetype,
@@ -714,7 +844,7 @@ export const uploadFinalMedia = async (req, res) => {
         const totalDone = created.length + replacedDocs.length
         const msgParts = []
         if (totalDone > 0) {
-            msgParts.push(`Uploaded ${totalDone} final file(s)`)
+            msgParts.push(`Uploaded ${totalDone} final image(s)`)
         }
         if (ignoredDuplicates.length > 0) {
             msgParts.push(`${ignoredDuplicates.length} duplicate(s) skipped`)
@@ -1034,9 +1164,25 @@ export const addClientSelection = async (req, res) => {
             })
         }
 
+        const maxSelections = getEffectiveMaxClientSelections(folder.share)
+        if (maxSelections != null) {
+            const currentCount = await FolderMedia.countDocuments({
+                folder: folder._id,
+                kind: "selection",
+                ...ACTIVE_MEDIA_MATCH,
+            })
+            if (currentCount >= maxSelections) {
+                return res.status(400).json({
+                    message: selectionLimitExceededMessage(maxSelections),
+                    maxClientSelections: maxSelections,
+                })
+            }
+        }
+
         const doc = await FolderMedia.create({
             folder: folder._id,
             kind: "selection",
+            set: raw.set ?? null,
             filePath: "",
             rawMediaId: raw._id,
             editStatus: "pending",
@@ -1142,6 +1288,14 @@ export const syncClientSelections = async (req, res) => {
         }
         const uniqueIds = [...new Set(normalized)]
 
+        const maxSelections = getEffectiveMaxClientSelections(folder.share)
+        if (maxSelections != null && uniqueIds.length > maxSelections) {
+            return res.status(400).json({
+                message: selectionLimitExceededMessage(maxSelections),
+                maxClientSelections: maxSelections,
+            })
+        }
+
         const raws = await FolderMedia.find({
             _id: { $in: uniqueIds },
             folder: folder._id,
@@ -1155,6 +1309,7 @@ export const syncClientSelections = async (req, res) => {
         }
 
         const want = new Set(uniqueIds.map(String))
+        const rawSetById = new Map(raws.map((r) => [String(r._id), r.set ?? null]))
         const existingSelections = await FolderMedia.find({
             folder: folder._id,
             kind: "selection",
@@ -1178,6 +1333,7 @@ export const syncClientSelections = async (req, res) => {
                 await FolderMedia.create({
                     folder: folder._id,
                     kind: "selection",
+                    set: rawSetById.get(String(rid)) ?? null,
                     filePath: "",
                     rawMediaId: rid,
                     editStatus: "pending",
@@ -1286,18 +1442,10 @@ export const streamSharedFinalLockedPreview = async (req, res) => {
             return res.status(404).json({ message: "File not found" })
         }
 
-        if (isVideoMime(finalDoc.mimeType)) {
-            const ok = await pipeLockedFinalVideoPlaceholderToResponse(res)
-            if (!ok && !res.headersSent) {
-                return res.status(422).json({ message: "Could not generate preview" })
-            }
-            return
-        }
-
         if (!isRasterImageMime(finalDoc.mimeType)) {
             return res.status(415).json({
                 message:
-                    "Locked preview is only available for images and videos (videos show a watermarked placeholder).",
+                    "Locked preview is only available for standard image formats.",
             })
         }
 

@@ -15,7 +15,7 @@ const MAX_FOLDER_FILE_MB = mbFromEnv("FOLDER_MAX_UPLOAD_MB", 500)
 const MAX_COVER_AND_SETTINGS_MB = mbFromEnv("COVER_MAX_UPLOAD_MB", 50)
 const MAX_GALLERY_MUSIC_MB = mbFromEnv("GALLERY_MUSIC_MAX_UPLOAD_MB", 40)
 
-/** Max image/video files per raw or final upload request (admin batch). */
+/** Max image files per raw or final upload request (admin batch). */
 const filesFromEnv = (key, fallback, { min, max }) => {
     const n = Number(process.env[key])
     if (!Number.isFinite(n) || n < min) return fallback
@@ -113,46 +113,22 @@ const ACCEPT_IMAGE_EXT = new Set([
     ".raf",
 ])
 
-/** Common video extensions (often sent as application/octet-stream on mobile). */
-const ACCEPT_VIDEO_EXT = new Set([
-    ".mp4",
-    ".m4v",
-    ".mov",
-    ".qt",
-    ".webm",
-    ".mkv",
-    ".avi",
-    ".mpg",
-    ".mpeg",
-    ".3gp",
-    ".3g2",
-    ".ogv",
-    ".wmv",
-])
-
-/** Some phones / tools send MP4 (etc.) as application/* instead of video/*. */
-const VIDEO_APPLICATION_MIMES = new Set([
-    "application/mp4",
-    "application/x-mp4",
-    "application/x-matroska",
-])
-
 const folderMediaFileFilter = (req, file, cb) => {
     const mime = String(file.mimetype || "").toLowerCase().trim()
     const ext = path.extname(file.originalname || "").toLowerCase()
-    const knownExt = ACCEPT_IMAGE_EXT.has(ext) || ACCEPT_VIDEO_EXT.has(ext)
 
     if (mime.startsWith("image/")) return cb(null, true)
-    if (mime.startsWith("video/")) return cb(null, true)
-    if (VIDEO_APPLICATION_MIMES.has(mime)) return cb(null, true)
 
-    if (knownExt && (mime === "" || mime === "application/octet-stream")) {
+    if (
+        ACCEPT_IMAGE_EXT.has(ext) &&
+        (mime === "" || mime === "application/octet-stream")
+    ) {
         return cb(null, true)
     }
 
     cb(
         new Error(
-            `Unsupported file type (${mime || "unknown"}). Use images, videos, or common camera raw formats.`
+            `Unsupported file type (${mime || "unknown"}). Use images or common camera raw formats.`
         )
     )
 }
@@ -212,10 +188,6 @@ const MULTIPART_FILE_FIELDS = [
     "images",
     "image[]",
     "images[]",
-    "video",
-    "videos",
-    "video[]",
-    "videos[]",
 ]
 
 const buildFolderMultipart = (subKind) =>

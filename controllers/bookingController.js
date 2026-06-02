@@ -3,7 +3,9 @@ import Booking from "../models/Booking.js"
 import Client from "../models/Client.js"
 import {
     BOOKING_SHOOT_TYPES,
-    BOOKING_SHOOT_TYPE_COLORS,
+    normalizeShootCategory,
+    shootTypeColor,
+    shootTypeLabel,
 } from "../constants/bookingShootTypes.js"
 
 const CLIENT_POPULATE = {
@@ -11,8 +13,19 @@ const CLIENT_POPULATE = {
     select: "name email contact location",
 }
 
-function colorForType(shootType) {
-    return BOOKING_SHOOT_TYPE_COLORS[shootType] || "sky"
+function resolveStoredCategory(o) {
+    if (o.category) {
+        const norm = normalizeShootCategory(o.category)
+        if (!norm.error) return norm
+    }
+    if (o.shootType) {
+        const norm = normalizeShootCategory(o.shootType)
+        if (!norm.error) return norm
+    }
+    return {
+        category: "other",
+        meta: { id: "other", label: "Other", color: "sky" },
+    }
 }
 
 export function serializeBooking(doc) {
@@ -31,19 +44,61 @@ export function serializeBooking(doc) {
             clientOut = { _id: o.client }
         }
     }
+
+    const resolved = resolveStoredCategory(o)
+    const category = resolved.category
+    const label = resolved.meta?.label ?? o.shootType ?? "Other"
+    const notes = (o.notes ?? o.description ?? "").trim()
+
     return {
         _id: o._id,
         title: o.title,
         client: clientOut,
-        shootType: o.shootType,
-        color: colorForType(o.shootType),
+        shootType: label,
+        category,
+        color: shootTypeColor(category),
         startsAt: o.startsAt,
         endsAt: o.endsAt || null,
         location: o.location || "",
-        description: o.description || "",
+        notes,
+        description: notes,
+        amountCharged:
+            o.amountCharged != null && Number.isFinite(Number(o.amountCharged))
+                ? Number(o.amountCharged)
+                : 0,
+        currency: (o.currency || "GHS").trim() || "GHS",
         createdAt: o.createdAt,
         updatedAt: o.updatedAt,
     }
+}
+
+function readNotes(body) {
+    if (body.notes !== undefined) return String(body.notes ?? "").trim()
+    if (body.description !== undefined) return String(body.description ?? "").trim()
+    return undefined
+}
+
+function readCurrency(body) {
+    if (body.currency === undefined) return undefined
+    const c = String(body.currency ?? "").trim().toUpperCase()
+    return c || "GHS"
+}
+
+/**
+ * @param {object} body
+ * @returns {{ provided: boolean, value?: number | null, invalid?: boolean }}
+ */
+function parseAmountCharged(body) {
+    if (!Object.prototype.hasOwnProperty.call(body, "amountCharged") &&
+        !Object.prototype.hasOwnProperty.call(body, "amount_charged")) {
+        return { provided: false }
+    }
+    const raw = body.amountCharged ?? body.amount_charged
+    if (raw === null || raw === "") return { provided: true, value: null }
+    const n =
+        typeof raw === "number" ? raw : Number(String(raw).trim().replace(/,/g, ""))
+    if (!Number.isFinite(n) || n < 0) return { provided: true, invalid: true }
+    return { provided: true, value: n }
 }
 
 /** @returns {{ y: number, m: number, d: number } | null} */
@@ -190,10 +245,10 @@ function resolveBookingClientId(body) {
 
 export const getBookingMeta = async (req, res) => {
     try {
-        const shootTypes = BOOKING_SHOOT_TYPES.map((id) => ({
-            id,
-            label: id,
-            color: colorForType(id),
+        const shootTypes = BOOKING_SHOOT_TYPES.map((t) => ({
+            id: t.id,
+            label: t.label,
+            color: t.color,
         }))
         res.set("Cache-Control", "private, no-store")
         return res.status(200).json({
@@ -254,8 +309,14 @@ export const listBookings = async (req, res) => {
         const { year, month, type, from, to } = req.query
         const filter = {}
 
-        if (type && BOOKING_SHOOT_TYPES.includes(String(type))) {
-            filter.shootType = type
+        if (type) {
+            const norm = normalizeShootCategory(String(type))
+            if (!norm.error) {
+                filter.$or = [
+                    { category: norm.category },
+                    { shootType: norm.meta.label },
+                ]
+            }
         }
 
         if (from || to) {
@@ -311,10 +372,10 @@ export const createBooking = async (req, res) => {
     try {
         const body = req.body || {}
         const title = String(body.title ?? "").trim()
-        const shootType = body.shootType
         const location = body.location != null ? String(body.location).trim() : ""
-        const description =
-            body.description != null ? String(body.description).trim() : ""
+        const notes =
+            readNotes(body) ??
+            (body.description != null ? String(body.description).trim() : "")
 
         if (!title) {
             return res.status(400).json({ message: "Shoot title is required" })
@@ -334,10 +395,9 @@ export const createBooking = async (req, res) => {
             return res.status(404).json({ message: "Client not found" })
         }
 
-        if (!shootType || !BOOKING_SHOOT_TYPES.includes(shootType)) {
-            return res.status(400).json({
-                message: `shootType must be one of: ${BOOKING_SHOOT_TYPES.join(", ")}`,
-            })
+        const typeNorm = normalizeShootCategory(body.shootType)
+        if (typeNorm.error) {
+            return res.status(400).json({ message: typeNorm.error })
         }
 
         const startsAt = resolveStartsAt(body, null)
@@ -355,14 +415,27 @@ export const createBooking = async (req, res) => {
             })
         }
 
+        const amountParsed = parseAmountCharged(body)
+        if (amountParsed.invalid) {
+            return res.status(400).json({
+                message: "amountCharged must be a non-negative number (GHS)",
+            })
+        }
+
+        const currency = readCurrency(body) ?? "GHS"
+
         const doc = await Booking.create({
             title,
             client: clientId,
-            shootType,
+            category: typeNorm.category,
+            shootType: typeNorm.meta.label,
             startsAt,
             endsAt: endsAt || null,
             location,
-            description,
+            notes,
+            description: notes,
+            amountCharged: amountParsed.provided ? (amountParsed.value ?? 0) : 0,
+            currency,
             createdBy: req.user?._id,
         })
         await doc.populate(CLIENT_POPULATE)
@@ -420,16 +493,32 @@ export const updateBooking = async (req, res) => {
         }
         if (body.location !== undefined)
             updates.location = String(body.location ?? "").trim()
-        if (body.description !== undefined)
-            updates.description = String(body.description ?? "").trim()
+        const notesUpdate = readNotes(body)
+        if (notesUpdate !== undefined) {
+            updates.notes = notesUpdate
+            updates.description = notesUpdate
+        }
 
-        if (body.shootType !== undefined) {
-            if (!BOOKING_SHOOT_TYPES.includes(body.shootType)) {
+        const currencyUpdate = readCurrency(body)
+        if (currencyUpdate !== undefined) updates.currency = currencyUpdate
+
+        const amountParsed = parseAmountCharged(body)
+        if (amountParsed.provided) {
+            if (amountParsed.invalid) {
                 return res.status(400).json({
-                    message: `shootType must be one of: ${BOOKING_SHOOT_TYPES.join(", ")}`,
+                    message: "amountCharged must be a non-negative number (GHS)",
                 })
             }
-            updates.shootType = body.shootType
+            updates.amountCharged = amountParsed.value
+        }
+
+        if (body.shootType !== undefined) {
+            const typeNorm = normalizeShootCategory(body.shootType)
+            if (typeNorm.error) {
+                return res.status(400).json({ message: typeNorm.error })
+            }
+            updates.category = typeNorm.category
+            updates.shootType = typeNorm.meta.label
         }
 
         const wantsStartChange =

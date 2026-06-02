@@ -1,4 +1,5 @@
 import path from "path"
+import { folderMediaSetMatch } from "./folderSetQuery.js"
 
 /** Escape a string for safe use inside a RegExp source (basename only). */
 export function escapeRegex(s) {
@@ -13,7 +14,8 @@ export async function findDuplicateFolderMedia(
     FolderMedia,
     folderId,
     kind,
-    originalFilename
+    originalFilename,
+    setId = undefined
 ) {
     const bn = path.basename(String(originalFilename || "").trim() || "file")
     const regex = new RegExp(`(^|[\\\\/])${escapeRegex(bn)}$`, "i")
@@ -22,6 +24,7 @@ export async function findDuplicateFolderMedia(
         kind,
         deletedAt: null,
         originalFilename: regex,
+        ...folderMediaSetMatch(setId),
     })
 }
 
@@ -36,11 +39,17 @@ export function basenameDuplicateKey(originalFilename) {
  * One DB round-trip for all folder media of a kind; O(1) duplicate lookups while uploading.
  * Values are live Mongoose docs (last wins if duplicate basenames exist in DB).
  */
-export async function loadFolderMediaByBasenameMap(FolderMedia, folderId, kind) {
+export async function loadFolderMediaByBasenameMap(
+    FolderMedia,
+    folderId,
+    kind,
+    setId = undefined
+) {
     const docs = await FolderMedia.find({
         folder: folderId,
         kind,
         deletedAt: null,
+        ...folderMediaSetMatch(setId),
     }).sort({
         createdAt: 1,
     })
@@ -65,7 +74,8 @@ export async function findDuplicateFolderMediaBatch(
     FolderMedia,
     folderId,
     kind,
-    filenames
+    filenames,
+    setId = undefined
 ) {
     const list = Array.isArray(filenames) ? filenames : []
     const truncated = list.length > DUPLICATE_PREVIEW_MAX_FILENAMES
@@ -109,6 +119,7 @@ export async function findDuplicateFolderMediaBatch(
                 folder: folderId,
                 kind,
                 deletedAt: null,
+                ...folderMediaSetMatch(setId),
                 $or,
             })
                 .select("_id originalFilename")

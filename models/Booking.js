@@ -1,5 +1,4 @@
 import mongoose from "mongoose"
-import { BOOKING_SHOOT_TYPES } from "../constants/bookingShootTypes.js"
 
 const bookingSchema = new mongoose.Schema(
     {
@@ -8,19 +7,25 @@ const bookingSchema = new mongoose.Schema(
             required: true,
             trim: true,
         },
-        /** Selected CRM client (dropdown); name/contact come from this record. */
         client: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "Client",
             required: true,
             index: true,
         },
+        /** Shoot category slug (see GET /api/bookings/meta). */
+        category: {
+            type: String,
+            required: true,
+            trim: true,
+            index: true,
+        },
+        /** Display label denormalized from category. */
         shootType: {
             type: String,
-            enum: BOOKING_SHOOT_TYPES,
             required: true,
+            trim: true,
         },
-        /** Combined date + start time (use for calendar ordering and range queries). */
         startsAt: {
             type: Date,
             required: true,
@@ -35,10 +40,26 @@ const bookingSchema = new mongoose.Schema(
             trim: true,
             default: "",
         },
+        notes: {
+            type: String,
+            trim: true,
+            default: "",
+        },
+        /** @deprecated Prefer `notes`; kept for older clients. */
         description: {
             type: String,
             trim: true,
             default: "",
+        },
+        amountCharged: {
+            type: Number,
+            min: 0,
+            default: 0,
+        },
+        currency: {
+            type: String,
+            trim: true,
+            default: "GHS",
         },
         createdBy: {
             type: mongoose.Schema.Types.ObjectId,
@@ -52,7 +73,6 @@ const bookingSchema = new mongoose.Schema(
             type: Date,
             default: null,
         },
-        /** In-app admin notification for upcoming shoot (once per booking window). */
         reminderAdminInAppSentAt: {
             type: Date,
             default: null,
@@ -61,7 +81,7 @@ const bookingSchema = new mongoose.Schema(
     { timestamps: true }
 )
 
-bookingSchema.index({ startsAt: 1, shootType: 1 })
+bookingSchema.index({ startsAt: 1, category: 1 })
 bookingSchema.index({ createdBy: 1, startsAt: -1 })
 bookingSchema.index({ client: 1 })
 
