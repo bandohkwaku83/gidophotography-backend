@@ -59,6 +59,12 @@ import {
 
 const FOLDER_COLL = Folder.collection.name
 
+/** Populate linked raw for selections — includes soft-deleted raws (hidden from uploads only). */
+const selectionRawPopulate = (rawSelect) => ({
+    path: "rawMediaId",
+    select: `${rawSelect} deletedAt`,
+})
+
 export const buildPublicUrl = buildPublicAssetUrl
 
 export const serializeRawUpload = (req, doc, opts = {}) => {
@@ -88,13 +94,16 @@ export const serializeRawUpload = (req, doc, opts = {}) => {
 export const serializeSelection = (req, doc, opts = {}) => {
     const { maskNestedRaw = false } = opts
     const raw = doc.rawMediaId
+    const rawHiddenFromUploads = Boolean(
+        raw && typeof raw === "object" && raw.deletedAt
+    )
     const rawObj =
         raw && typeof raw === "object" && raw.filePath
             ? serializeRawUpload(req, raw, {
                   maskOriginalWithDisplay: maskNestedRaw,
               })
             : null
-    return {
+    const out = {
         _id: doc._id,
         editStatus: doc.editStatus,
         setId:
@@ -106,6 +115,10 @@ export const serializeSelection = (req, doc, opts = {}) => {
         createdAt: doc.createdAt,
         updatedAt: doc.updatedAt,
     }
+    if (rawHiddenFromUploads) {
+        out.rawHiddenFromUploads = true
+    }
+    return out
 }
 
 export const serializeFinal = (req, doc) => {
@@ -189,11 +202,7 @@ export const getFolderMediaCollections = async (
         FolderMedia.find({ folder: folderId, kind: "selection", ...ACTIVE_MEDIA_MATCH })
             .select(selectionSelect)
             .sort({ createdAt: 1 })
-            .populate({
-                path: "rawMediaId",
-                select: rawSelect,
-                match: { ...ACTIVE_MEDIA_MATCH },
-            })
+            .populate(selectionRawPopulate(rawSelect))
             .lean(),
         FolderMedia.find({ folder: folderId, kind: "final", ...ACTIVE_MEDIA_MATCH })
             .select(finalSelect)
@@ -896,46 +905,42 @@ const deleteFolderMediaCore = async (req, res, allowedKinds) => {
         }
 
         if (!allowedKinds.includes(doc.kind)) {
+            if (doc.kind === "selection") {
+                return res.status(400).json({
+                    message:
+                        "Client selections cannot be deleted by admin. Delete the raw upload instead if you need to remove the file from the gallery.",
+                })
+            }
             return res.status(400).json({
                 message: `This endpoint only deletes ${allowedKinds.join(" or ")} items. Use the correct URL for ${doc.kind} entries.`,
             })
-        }
-
-        if (doc.kind === "raw") {
-            const picks = await FolderMedia.countDocuments({
-                folder: id,
-                kind: "selection",
-                rawMediaId: doc._id,
-                ...ACTIVE_MEDIA_MATCH,
-            })
-            if (picks > 0) {
-                return res.status(400).json({
-                    message:
-                        "Cannot delete this photo because the client has selected it. Remove selections first.",
-                })
-            }
         }
 
         doc.deletedAt = new Date()
         doc.deletedBy = "media"
         await doc.save()
 
-        return res.status(200).json({
+        const payload = {
             message: "Media deleted (restorable from trash up to 30 days by default)",
             deleted: { _id: doc._id, kind: doc.kind },
             restoreBefore: restoreDeadlineISO(doc.deletedAt),
-        })
+        }
+        if (doc.kind === "raw") {
+            payload.message =
+                "Removed from raw uploads. Client selections are unchanged and still show this photo."
+        }
+        return res.status(200).json(payload)
     } catch (error) {
         console.error("Delete folder media error:", error)
         return res.status(500).json({ message: "Server error" })
     }
 }
 
-/** Any kind: raw, final, or selection (admin). */
+/** Raw or final only — client selections are not admin-deletable (delete the raw upload instead). */
 export const deleteFolderMedia = (req, res) =>
-    deleteFolderMediaCore(req, res, ["raw", "final", "selection"])
+    deleteFolderMediaCore(req, res, ["raw", "final"])
 
-/** Raw upload only. */
+/** Raw upload only (allowed even when the client has selected this photo). */
 export const deleteFolderRawMedia = (req, res) =>
     deleteFolderMediaCore(req, res, ["raw"])
 
@@ -943,7 +948,7 @@ export const deleteFolderRawMedia = (req, res) =>
 export const deleteFolderFinalMedia = (req, res) =>
     deleteFolderMediaCore(req, res, ["final"])
 
-/** Delete every raw upload in the folder (original + preview files). Blocked if any client selections exist. */
+/** Delete every raw upload in the folder (original + preview files). Client selections are kept. */
 export const deleteAllFolderRawMedia = async (req, res) => {
     try {
         const { id } = req.params
@@ -954,19 +959,6 @@ export const deleteAllFolderRawMedia = async (req, res) => {
         const folder = await Folder.findOne({ _id: id, deletedAt: null })
         if (!folder) {
             return res.status(404).json({ message: "Folder not found" })
-        }
-
-        const selectionCount = await FolderMedia.countDocuments({
-            folder: id,
-            kind: "selection",
-            ...ACTIVE_MEDIA_MATCH,
-        })
-        if (selectionCount > 0) {
-            return res.status(400).json({
-                message:
-                    "Cannot delete all raw uploads while the gallery has client selections. Remove selections first, then retry.",
-                selectionCount,
-            })
         }
 
         const now = new Date()
@@ -1044,10 +1036,9 @@ export const patchSelectionEditStatus = async (req, res) => {
             folder: id,
             kind: "selection",
             ...ACTIVE_MEDIA_MATCH,
-        }).populate({
-            path: "rawMediaId",
-            match: { ...ACTIVE_MEDIA_MATCH },
-        })
+        }).populate(selectionRawPopulate(
+            "_id set filePath displayFilePath thumbPath originalFilename mimeType size createdAt"
+        ))
 
         if (!doc) {
             return res.status(404).json({ message: "Selection not found" })
@@ -1055,10 +1046,11 @@ export const patchSelectionEditStatus = async (req, res) => {
 
         doc.editStatus = editStatus
         await doc.save()
-        await doc.populate({
-            path: "rawMediaId",
-            match: { ...ACTIVE_MEDIA_MATCH },
-        })
+        await doc.populate(
+            selectionRawPopulate(
+                "_id set filePath displayFilePath thumbPath originalFilename mimeType size createdAt"
+            )
+        )
 
         return res.status(200).json({
             message: "Selection updated",
@@ -1296,11 +1288,19 @@ export const syncClientSelections = async (req, res) => {
             })
         }
 
+        const existingSelections = await FolderMedia.find({
+            folder: folder._id,
+            kind: "selection",
+            ...ACTIVE_MEDIA_MATCH,
+        })
+        const priorRawIds = new Set(
+            existingSelections.map((s) => String(s.rawMediaId))
+        )
+
         const raws = await FolderMedia.find({
             _id: { $in: uniqueIds },
             folder: folder._id,
             kind: "raw",
-            ...ACTIVE_MEDIA_MATCH,
         })
         if (raws.length !== uniqueIds.length) {
             return res.status(400).json({
@@ -1308,13 +1308,19 @@ export const syncClientSelections = async (req, res) => {
             })
         }
 
+        const rawById = new Map(raws.map((r) => [String(r._id), r]))
+        for (const rid of uniqueIds) {
+            const raw = rawById.get(String(rid))
+            if (raw?.deletedAt && !priorRawIds.has(String(rid))) {
+                return res.status(400).json({
+                    message:
+                        "One or more photos are no longer available in the gallery",
+                })
+            }
+        }
+
         const want = new Set(uniqueIds.map(String))
         const rawSetById = new Map(raws.map((r) => [String(r._id), r.set ?? null]))
-        const existingSelections = await FolderMedia.find({
-            folder: folder._id,
-            kind: "selection",
-            ...ACTIVE_MEDIA_MATCH,
-        })
 
         let removed = 0
         for (const sel of existingSelections) {

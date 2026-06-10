@@ -1248,7 +1248,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "folders", "{{folderId}}", "media", "raw", "{{rawMediaId}}"]
 						},
-						"description": "Deletes one raw upload by id (original and generated *-wm.jpg preview if present). Fails if the client has already selected this photo (remove selections first). Same as DELETE .../media/:id if that item is raw."
+						"description": "Removes one photo from raw uploads only — allowed even when the client selected it. selection[] and the client share gallery keep the pick with full image URLs (rawHiddenFromUploads: true on that selection). Admin cannot delete selection rows directly. Restore raw from trash to show it in uploads again."
 					}
 				},
 				{
@@ -1263,7 +1263,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "folders", "{{folderId}}", "media", "raw"]
 						},
-						"description": "Deletes every raw upload in the folder (each original plus *-wm.jpg preview if present). Returns 400 if any client selection rows exist; clear selections first."
+						"description": "Deletes every raw upload in the folder (each original plus *-wm.jpg preview if present). Client selections are preserved."
 					}
 				},
 				{
@@ -1357,7 +1357,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "folders", "{{folderId}}", "selection", "{{selectionMediaId}}"]
 						},
-						"description": "editStatus: pending | in_progress | done. Set {{selectionMediaId}} from GET one folder → selection[]._id."
+						"description": "editStatus: pending | in_progress | done. Selection rows are not admin-deletable (PATCH only). To remove a selected photo from the gallery, delete it from Raw uploads."
 					}
 				},
 				{
