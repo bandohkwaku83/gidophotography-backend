@@ -3,6 +3,10 @@ import path from "path"
 import fs from "fs"
 import crypto from "crypto"
 import dotenv from "dotenv"
+import {
+    ACCEPT_VIDEO_EXT,
+    VIDEO_APPLICATION_MIMES,
+} from "../utils/videoFileTypes.js"
 
 dotenv.config()
 
@@ -15,7 +19,7 @@ const MAX_FOLDER_FILE_MB = mbFromEnv("FOLDER_MAX_UPLOAD_MB", 500)
 const MAX_COVER_AND_SETTINGS_MB = mbFromEnv("COVER_MAX_UPLOAD_MB", 50)
 const MAX_GALLERY_MUSIC_MB = mbFromEnv("GALLERY_MUSIC_MAX_UPLOAD_MB", 40)
 
-/** Max image files per raw or final upload request (admin batch). */
+/** Max image/video files per raw or final upload request (admin batch). */
 const filesFromEnv = (key, fallback, { min, max }) => {
     const n = Number(process.env[key])
     if (!Number.isFinite(n) || n < min) return fallback
@@ -116,19 +120,19 @@ const ACCEPT_IMAGE_EXT = new Set([
 const folderMediaFileFilter = (req, file, cb) => {
     const mime = String(file.mimetype || "").toLowerCase().trim()
     const ext = path.extname(file.originalname || "").toLowerCase()
+    const knownExt = ACCEPT_IMAGE_EXT.has(ext) || ACCEPT_VIDEO_EXT.has(ext)
 
     if (mime.startsWith("image/")) return cb(null, true)
+    if (mime.startsWith("video/")) return cb(null, true)
+    if (VIDEO_APPLICATION_MIMES.has(mime)) return cb(null, true)
 
-    if (
-        ACCEPT_IMAGE_EXT.has(ext) &&
-        (mime === "" || mime === "application/octet-stream")
-    ) {
+    if (knownExt && (mime === "" || mime === "application/octet-stream")) {
         return cb(null, true)
     }
 
     cb(
         new Error(
-            `Unsupported file type (${mime || "unknown"}). Use images or common camera raw formats.`
+            `Unsupported file type (${mime || "unknown"}). Use images, videos, or common camera raw formats.`
         )
     )
 }
@@ -188,6 +192,10 @@ const MULTIPART_FILE_FIELDS = [
     "images",
     "image[]",
     "images[]",
+    "video",
+    "videos",
+    "video[]",
+    "videos[]",
 ]
 
 const buildFolderMultipart = (subKind) =>
@@ -207,6 +215,12 @@ export const uploadFolderFinal = buildFolderMultipart("final")
 
 /** Resolved max files per raw/final multipart (from FOLDER_MAX_FILES_PER_UPLOAD). */
 export const folderUploadMaxFilesPerRequest = MAX_FILES_PER_REQUEST
+
+/** Per-file byte limit for folder raw/final uploads (images + videos). */
+export const folderUploadMaxFileSizeBytes = MAX_FILE_SIZE_BYTES
+
+/** Per-file MB limit for folder raw/final uploads (from FOLDER_MAX_UPLOAD_MB, default 500). */
+export const folderUploadMaxFileSizeMb = MAX_FOLDER_FILE_MB
 
 export const collectFolderUploadFiles = (req) => {
     const out = []

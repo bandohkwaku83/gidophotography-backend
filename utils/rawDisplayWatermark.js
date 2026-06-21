@@ -1,6 +1,7 @@
 import fs from "fs"
 import path from "path"
 import sharp from "sharp"
+import { isVideoFile } from "./videoFileTypes.js"
 
 const MAX_PREVIEW_EDGE = 2048
 
@@ -71,8 +72,7 @@ export async function generateRawDisplayAsset({
     mimeType,
 }) {
     try {
-        const isVideo = String(mimeType || "").startsWith("video/")
-        if (isVideo) {
+        if (isVideoFile({ mimeType, filename: sourcePath })) {
             const w = 1280
             const h = 720
             await sharp({

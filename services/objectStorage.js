@@ -22,6 +22,13 @@ const s3HttpsAgent = new https.Agent({
     maxSockets: s3MaxSockets,
 })
 
+const s3RequestTimeoutMs = (() => {
+    const n = Number(process.env.S3_REQUEST_TIMEOUT_MS)
+    if (Number.isFinite(n) && n > 0) return Math.floor(n)
+    // Large gallery videos (up to FOLDER_MAX_UPLOAD_MB, default 500MB) stream to S3 after upload.
+    return 60 * 60 * 1000
+})()
+
 /** Browser + CDN caching for uploaded gallery assets (immutable keys). Override via S3_OBJECT_CACHE_CONTROL. */
 const s3UploadCacheControl =
     process.env.S3_OBJECT_CACHE_CONTROL?.trim() ||
@@ -41,7 +48,11 @@ function getS3() {
     if (!s3Client) {
         s3Client = new S3Client({
             region: process.env.AWS_REGION,
-            requestHandler: new NodeHttpHandler({ httpsAgent: s3HttpsAgent }),
+            requestHandler: new NodeHttpHandler({
+                httpsAgent: s3HttpsAgent,
+                connectionTimeout: 30_000,
+                requestTimeout: s3RequestTimeoutMs,
+            }),
         })
     }
     return s3Client

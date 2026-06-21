@@ -5,7 +5,7 @@ import dotenv from "dotenv"
 import path from "path"
 import multer from "multer"
 import sharp from "sharp"
-import { folderUploadMaxFilesPerRequest } from "./middleware/upload.js"
+import { folderUploadMaxFilesPerRequest, folderUploadMaxFileSizeMb } from "./middleware/upload.js"
 import authRoutes from "./routes/authRoutes.js"
 import clientRoutes from "./routes/clientRoutes.js"
 import folderRoutes from "./routes/folderRoutes.js"
@@ -89,7 +89,7 @@ app.use((err, req, res, next) => {
             LIMIT_FILE_SIZE:
                 err.field === "backgroundMusic"
                     ? "Audio file exceeds GALLERY_MUSIC_MAX_UPLOAD_MB (default 40MB). Raise GALLERY_MUSIC_MAX_UPLOAD_MB in .env or use a shorter track."
-                    : "File exceeds FOLDER_MAX_UPLOAD_MB (default 500MB per file for gallery uploads). Raise it in .env or split the upload.",
+                    : `File exceeds FOLDER_MAX_UPLOAD_MB (default 500MB per image or video). Current limit: ${folderUploadMaxFileSizeMb}MB. Raise FOLDER_MAX_UPLOAD_MB in .env or split the upload.`,
             LIMIT_FILE_COUNT:
                 `Too many files in one request. Max is ${folderUploadMaxFilesPerRequest} per upload (FOLDER_MAX_FILES_PER_UPLOAD in .env); send another batch if needed.`,
             LIMIT_FIELD_COUNT:
@@ -97,7 +97,7 @@ app.use((err, req, res, next) => {
             LIMIT_PART_COUNT:
                 `Too many multipart parts in one request. Try splitting the upload or lowering FOLDER_MAX_FILES_PER_UPLOAD (current max files: ${folderUploadMaxFilesPerRequest}).`,
             LIMIT_UNEXPECTED_FILE:
-                'Use a supported file field name: "files" or "files[]" (recommended for many), or file, file[], photo, photos[], image, images[]. Text fields like selectionMediaId are allowed next to files.',
+                'Use a supported file field name: "files" or "files[]" (recommended for many), or file, file[], photo, photos[], image, images[], video, videos[]. Text fields like selectionMediaId are allowed next to files.',
         }
         return res.status(400).json({
             message: err.message,
@@ -123,6 +123,13 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 7000
 const MONGO_URL = mongoUrlFromEnv()
+
+/** Allow slow client uploads for large videos (FOLDER_MAX_UPLOAD_MB, default 500MB per file). */
+const httpRequestTimeoutMs = (() => {
+    const n = Number(process.env.HTTP_REQUEST_TIMEOUT_MS)
+    if (Number.isFinite(n) && n > 0) return Math.floor(n)
+    return 60 * 60 * 1000
+})()
 
 if (!MONGO_URL) {
     const exists = fs.existsSync(envPath)
@@ -177,9 +184,14 @@ mongoose
                 "[storage] Local disk (./uploads). For S3 set STORAGE_DRIVER=s3, S3_BUCKET, AWS_REGION."
             )
         }
-        app.listen(PORT, () => {
+        const httpServer = app.listen(PORT, () => {
             console.log(`Server is running on port ${PORT}`)
+            console.log(
+                `[uploads] Max per file: ${folderUploadMaxFileSizeMb}MB (FOLDER_MAX_UPLOAD_MB); max files/request: ${folderUploadMaxFilesPerRequest}; HTTP request timeout: ${Math.round(httpRequestTimeoutMs / 60000)}min`
+            )
         })
+        httpServer.requestTimeout = httpRequestTimeoutMs
+        httpServer.headersTimeout = httpRequestTimeoutMs + 60_000
     })
     .catch((error) => {
         console.error(error)
