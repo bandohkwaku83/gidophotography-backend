@@ -11,6 +11,7 @@ import {
 } from "../utils/smsPlaceholders.js"
 import { parseSmsCostPerMessage } from "../utils/smsCost.js"
 import { applySmsBranding } from "../utils/smsBranding.js"
+import { resolveGalleryPublicBaseUrl } from "../utils/shareUrl.js"
 
 /**
  * Frontends often send `client`, `selectedClientId`, or `{ client: { _id } }` instead of `clientId`.
@@ -48,6 +49,10 @@ export const getSmsMeta = async (req, res) => {
                 prefixSet: !!(process.env.SMS_BRAND_PREFIX || "").trim(),
                 suffixSet: !!(process.env.SMS_BRAND_SUFFIX || "").trim(),
             },
+            galleryPublicBaseUrl: resolveGalleryPublicBaseUrl(),
+            gallerySharePath: (
+                process.env.FRONTEND_SHARE_PATH || "share"
+            ).replace(/^\/+|\/+$/g, "") || "share",
             singleClientIdFields: [
                 "clientId",
                 "client_id",

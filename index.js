@@ -5,7 +5,11 @@ import dotenv from "dotenv"
 import path from "path"
 import multer from "multer"
 import sharp from "sharp"
-import { folderUploadMaxFilesPerRequest, folderUploadMaxFileSizeMb } from "./middleware/upload.js"
+import {
+    folderUploadMaxFilesPerRequest,
+    folderUploadMaxFileSizeMb,
+} from "./middleware/upload.js"
+import { galleryUrlConfigWarning } from "./utils/shareUrl.js"
 import authRoutes from "./routes/authRoutes.js"
 import clientRoutes from "./routes/clientRoutes.js"
 import folderRoutes from "./routes/folderRoutes.js"
@@ -184,6 +188,8 @@ mongoose
                 "[storage] Local disk (./uploads). For S3 set STORAGE_DRIVER=s3, S3_BUCKET, AWS_REGION."
             )
         }
+        const galleryWarn = galleryUrlConfigWarning()
+        if (galleryWarn) console.warn(`[gallery-url] ${galleryWarn}`)
         const httpServer = app.listen(PORT, () => {
             console.log(`Server is running on port ${PORT}`)
             console.log(
