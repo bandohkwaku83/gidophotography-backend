@@ -27,6 +27,7 @@ function parseUploadNotifyDebounceMs() {
 
 const rawNotifyTimers = new Map()
 const finalNotifyTimers = new Map()
+const pendingGalleryBaseByFolder = new Map()
 
 function envFlag(key, defaultTrue = true) {
     const v = process.env[key]
@@ -58,6 +59,7 @@ async function sendFolderClientSms({
     userId,
     trigger,
     applyBranding = true,
+    galleryPublicBaseUrl,
 }) {
     const msisdn = normalizeGhanaMsisdn(client.contact)
     if (!msisdn) {
@@ -70,6 +72,7 @@ async function sendFolderClientSms({
     const rendered = replaceSmsPlaceholders(template, {
         clientName: client.name,
         folder,
+        galleryPublicBaseUrl,
     })
 
     if (!rendered.trim()) return
@@ -112,7 +115,7 @@ const DEFAULT_RAW_UPLOAD_TEMPLATE_WITH_LINK =
 const DEFAULT_RAW_UPLOAD_TEMPLATE_NO_LINK =
     "Hi {{client_name}}, your photos have been uploaded. Please review them and select your preferred images for editing."
 
-async function runRawUploadSms(folderId, userId) {
+async function runRawUploadSms(folderId, userId, galleryPublicBaseUrl) {
     if (!envFlag("SMS_NOTIFY_ON_RAW_UPLOAD", true)) return
 
     const folder = await Folder.findOne({ _id: folderId, deletedAt: null })
@@ -137,6 +140,7 @@ async function runRawUploadSms(folderId, userId) {
         template,
         userId,
         trigger: "raw_upload",
+        galleryPublicBaseUrl,
     })
 }
 
@@ -151,8 +155,8 @@ const DEFAULT_FINAL_TEMPLATE_NO_LINK =
  * Default strips the scheme (many phones still open the host path).
  * SMS_FINAL_UNPAID_URL_FORMAT: noscheme (default) | full | none
  */
-function galleryLinkForUnpaidSms(folder) {
-    const raw = buildGalleryShareUrl(folder)
+function galleryLinkForUnpaidSms(folder, galleryPublicBaseUrl) {
+    const raw = buildGalleryShareUrl(folder, galleryPublicBaseUrl)
     if (!raw) return ""
     const mode = (process.env.SMS_FINAL_UNPAID_URL_FORMAT || "noscheme")
         .trim()
@@ -201,7 +205,7 @@ signed
 GidoPhotography/weddings and vows`
 
 function replaceUnpaidSmsPlaceholders(template, ctx) {
-    const { amountStr, paymentBlock, clientName, folder } = ctx
+    const { amountStr, paymentBlock, clientName, folder, galleryPublicBaseUrl } = ctx
     let t = String(template)
     t = t.replace(/\{\{\s*outstanding_amount\s*\}\}/gi, amountStr)
     t = t.replace(/\{\{\s*payment_block\s*\}\}/gi, paymentBlock)
@@ -209,7 +213,7 @@ function replaceUnpaidSmsPlaceholders(template, ctx) {
     if (Object.prototype.hasOwnProperty.call(ctx, "galleryLinkForSms")) {
         galleryLinkOverride = ctx.galleryLinkForSms
     } else {
-        galleryLinkOverride = galleryLinkForUnpaidSms(folder)
+        galleryLinkOverride = galleryLinkForUnpaidSms(folder, galleryPublicBaseUrl)
     }
     return replaceSmsPlaceholders(t, {
         clientName,
@@ -218,7 +222,7 @@ function replaceUnpaidSmsPlaceholders(template, ctx) {
     })
 }
 
-async function runFinalUploadSmsInternal(folder, userId) {
+async function runFinalUploadSmsInternal(folder, userId, galleryPublicBaseUrl) {
     if (!envFlag("SMS_NOTIFY_ON_FINAL_UPLOAD", true)) return
 
     const envFinal = process.env.SMS_NOTIFY_FINAL_TEMPLATE?.trim()
@@ -240,10 +244,11 @@ async function runFinalUploadSmsInternal(folder, userId) {
         template,
         userId,
         trigger: "final_upload",
+        galleryPublicBaseUrl,
     })
 }
 
-async function runFinalUnpaidUploadSms(folder, userId) {
+async function runFinalUnpaidUploadSms(folder, userId, galleryPublicBaseUrl) {
     if (!envFlag("SMS_NOTIFY_ON_FINAL_UPLOAD", true)) return
 
     const client = await Client.findById(folder.client)
@@ -268,7 +273,7 @@ async function runFinalUnpaidUploadSms(folder, userId) {
             paymentBlock: "",
             clientName: client.name,
             folder,
-            galleryLinkForSms: galleryLinkForUnpaidSms(folder),
+            galleryPublicBaseUrl,
         })
         await sendFolderClientSms({
             folder,
@@ -287,7 +292,7 @@ async function runFinalUnpaidUploadSms(folder, userId) {
             paymentBlock,
             clientName: client.name,
             folder,
-            galleryLinkForSms: galleryLinkForUnpaidSms(folder),
+            galleryPublicBaseUrl,
         })
         const suffix = process.env.SMS_FINAL_UNPAID_PART2_SUFFIX?.trim() || ""
         const part2Core = [rendered2, suffix].filter(Boolean).join("\n\n").trim()
@@ -313,7 +318,7 @@ async function runFinalUnpaidUploadSms(folder, userId) {
         paymentBlock,
         clientName: client.name,
         folder,
-        galleryLinkForSms: galleryLinkForUnpaidSms(folder),
+        galleryPublicBaseUrl,
     })
 
     await sendFolderClientSms({
@@ -326,27 +331,32 @@ async function runFinalUnpaidUploadSms(folder, userId) {
     })
 }
 
-async function runFinalUploadSmsRouter(folderId, userId) {
+async function runFinalUploadSmsRouter(folderId, userId, galleryPublicBaseUrl) {
     const folder = await Folder.findOne({ _id: folderId, deletedAt: null })
     if (!folder) return
 
     const amt = folder.finalDelivery?.outstandingAmountGHS
     if (amt != null && Number(amt) > 0) {
-        await runFinalUnpaidUploadSms(folder, userId)
+        await runFinalUnpaidUploadSms(folder, userId, galleryPublicBaseUrl)
     } else {
-        await runFinalUploadSmsInternal(folder, userId)
+        await runFinalUploadSmsInternal(folder, userId, galleryPublicBaseUrl)
     }
 }
 
-function debounceFolderNotify(timerMap, folderId, userId, runner, label) {
+function debounceFolderNotify(timerMap, folderId, userId, runner, label, opts = {}) {
     const key = String(folderId)
     const prev = timerMap.get(key)
     if (prev) clearTimeout(prev)
+    if (opts.galleryPublicBaseUrl) {
+        pendingGalleryBaseByFolder.set(key, opts.galleryPublicBaseUrl)
+    }
 
     const ms = parseUploadNotifyDebounceMs()
     const tid = setTimeout(() => {
         timerMap.delete(key)
-        runner(folderId, userId).catch((err) =>
+        const galleryPublicBaseUrl = pendingGalleryBaseByFolder.get(key)
+        pendingGalleryBaseByFolder.delete(key)
+        runner(folderId, userId, galleryPublicBaseUrl).catch((err) =>
             console.error(`[SMS ${label}]`, err)
         )
     }, ms)
@@ -355,22 +365,24 @@ function debounceFolderNotify(timerMap, folderId, userId, runner, label) {
 }
 
 /** Does not block the HTTP response; one SMS after uploads settle (debounced). */
-export function scheduleRawUploadSms(folderId, userId) {
+export function scheduleRawUploadSms(folderId, userId, opts = {}) {
     debounceFolderNotify(
         rawNotifyTimers,
         folderId,
         userId,
         runRawUploadSms,
-        "raw_upload"
+        "raw_upload",
+        opts
     )
 }
 
-export function scheduleFinalUploadSms(folderId, userId) {
+export function scheduleFinalUploadSms(folderId, userId, opts = {}) {
     debounceFolderNotify(
         finalNotifyTimers,
         folderId,
         userId,
         runFinalUploadSmsRouter,
-        "final_upload"
+        "final_upload",
+        opts
     )
 }

@@ -25,6 +25,7 @@ import { buildCorsMiddleware } from "./utils/corsMiddleware.js"
 import { isObjectStorageS3 } from "./services/objectStorage.js"
 import { startBookingReminderCron } from "./services/bookingReminderJob.js"
 import { startTrashPurgeCron } from "./services/trashPurgeJob.js"
+import { backfillMediaSortOrders } from "./utils/mediaSortOrder.js"
 
 // Explicit path so .env is loaded even if cwd differs; override beats empty shell exports
 const envPath = path.join(process.cwd(), ".env")
@@ -175,8 +176,9 @@ if (!mongoSchemeOk) {
 
 mongoose
     .connect(MONGO_URL)
-    .then(() => {
+    .then(async () => {
         console.log("Connected to MongoDB")
+        await backfillMediaSortOrders()
         startBookingReminderCron()
         startTrashPurgeCron()
         if (isObjectStorageS3()) {

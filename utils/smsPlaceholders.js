@@ -33,8 +33,9 @@ function formatEventDate(dateVal) {
 
 /**
  * @param {string} template
- * @param {{ clientName?: string, folder?: object|null, galleryLinkOverride?: string }} ctx
+ * @param {{ clientName?: string, folder?: object|null, galleryLinkOverride?: string, galleryPublicBaseUrl?: string }} ctx
  *        galleryLinkOverride — when set, used instead of buildGalleryShareUrl(folder) for {{gallery_link}}
+ *        galleryPublicBaseUrl — optional origin override for buildGalleryShareUrl
  */
 export function replaceSmsPlaceholders(template, ctx = {}) {
     const clientName = ctx.clientName ?? ""
@@ -44,7 +45,7 @@ export function replaceSmsPlaceholders(template, ctx = {}) {
     if (ctx.galleryLinkOverride !== undefined && ctx.galleryLinkOverride !== null) {
         galleryLink = String(ctx.galleryLinkOverride)
     } else if (folder) {
-        galleryLink = buildGalleryShareUrl(folder)
+        galleryLink = buildGalleryShareUrl(folder, ctx.galleryPublicBaseUrl)
     }
 
     return String(template).replace(TOKEN_PATTERN, (_, key) => {

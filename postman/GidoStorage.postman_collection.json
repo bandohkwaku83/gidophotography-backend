@@ -1102,7 +1102,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "folders", "{{folderId}}"]
 						},
-						"description": "Returns folder details plus uploads, selection, finals, and set metadata. share.maxClientSelections (and top-level maxClientSelections): null = unlimited, number = max client picks. Each media item includes setId. Also includes uploadsBySet, selectionBySet, finalsBySet buckets (with General for uncategorized) plus set counts: rawCount, selectionCount, finalCount."
+						"description": "Returns folder details plus uploads, selection, finals, and set metadata. share.maxClientSelections (and top-level maxClientSelections): null = unlimited, number = max client picks. Each raw/final item includes setId and sortOrder; arrays are sorted by sortOrder ascending within each set bucket. Also includes uploadsBySet, selectionBySet, finalsBySet buckets (with General for uncategorized) plus set counts: rawCount, selectionCount, finalCount."
 					}
 				},
 				{
@@ -1193,6 +1193,26 @@
 							"path": ["api", "folders", "{{folderId}}", "media", "duplicate-preview"]
 						},
 						"description": "Sends kind + filenames[] (e.g. every file.name before a big batch). Optional setId scopes duplicate checks to a specific set for raw/final uploads. Uses batched DB queries (not one query per file). Response: hasConflicts, conflicts[], truncated, maxFilenames."
+					}
+				},
+				{
+					"name": "Reorder media (dashboard drag-and-drop)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"kind\": \"raw\",\n    \"setId\": null,\n    \"orderedIds\": [\"{{rawMediaId}}\"]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/media/reorder",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "media", "reorder"]
+						},
+						"description": "Persists drag-and-drop order for one collection tab. kind: raw | final. setId: null for General or a set _id. orderedIds must list every active item in that bucket exactly once (0-based sortOrder assigned in array order). Returns refreshed uploads/finals arrays and uploadsBySet/finalsBySet."
 					}
 				},
 				{

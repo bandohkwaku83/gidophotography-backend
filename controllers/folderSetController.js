@@ -2,6 +2,7 @@ import mongoose from "mongoose"
 import Folder from "../models/Folder.js"
 import FolderSet from "../models/FolderSet.js"
 import FolderMedia from "../models/FolderMedia.js"
+import { appendMediaToSetBucketEnd } from "../utils/mediaSortOrder.js"
 
 const ACTIVE_MEDIA_MATCH = { deletedAt: null }
 
@@ -274,14 +275,16 @@ export const deleteFolderSet = async (req, res) => {
         set.deletedAt = now
         await set.save()
 
+        await appendMediaToSetBucketEnd(id, setId, null)
         await FolderMedia.updateMany(
-            { folder: id, set: setId, ...ACTIVE_MEDIA_MATCH },
+            { folder: id, set: setId, kind: "selection", ...ACTIVE_MEDIA_MATCH },
             { $set: { set: null } }
         )
 
         const payload = await buildSetsPayload(id)
         return res.status(200).json({
-            message: "Set deleted. Its uploads were moved to General.",
+            message:
+                "Set deleted. Its uploads were moved to General at the end of each collection.",
             ...payload,
         })
     } catch (error) {

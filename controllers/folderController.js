@@ -19,7 +19,7 @@ import {
     SHARE_LINK_EXPIRY_PRESETS,
 } from "../utils/shareLinkExpiry.js"
 import { FOLDER_STATUS_VALUES } from "../constants/folderStatus.js"
-import { buildGalleryShareUrl } from "../utils/shareUrl.js"
+import { buildGalleryShareUrl, resolveGalleryPublicBaseUrl } from "../utils/shareUrl.js"
 import { buildPublicAssetUrl } from "../utils/assetUrl.js"
 import {
     isObjectStorageS3,
@@ -112,7 +112,7 @@ const serializeFolder = (req, folder) => {
             bgmOn && obj.backgroundMusic
                 ? buildPublicAssetUrl(req, obj.backgroundMusic)
                 : "",
-        shareUrl: buildGalleryShareUrl(folder),
+        shareUrl: buildGalleryShareUrl(folder, resolveGalleryPublicBaseUrl(req)),
         shareExpired,
         coverFocalX: focalX,
         coverFocalY: focalY,

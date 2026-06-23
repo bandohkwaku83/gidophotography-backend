@@ -51,8 +51,8 @@ export const getSmsMeta = async (req, res) => {
             },
             galleryPublicBaseUrl: resolveGalleryPublicBaseUrl(),
             gallerySharePath: (
-                process.env.FRONTEND_SHARE_PATH || "share"
-            ).replace(/^\/+|\/+$/g, "") || "share",
+                process.env.FRONTEND_SHARE_PATH || "g"
+            ).replace(/^\/+|\/+$/g, "") || "g",
             singleClientIdFields: [
                 "clientId",
                 "client_id",
@@ -230,6 +230,7 @@ export const sendBulkSms = async (req, res) => {
                     ? bulkDefault
                     : valid[0].client.name,
             folder: folderDoc,
+            galleryPublicBaseUrl: resolveGalleryPublicBaseUrl(req),
         })
 
         if (!rendered.trim()) {
