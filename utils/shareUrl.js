@@ -1,13 +1,15 @@
 /**
  * Public client gallery links (SMS {{gallery_link}}, folder.shareUrl, etc.).
  *
- * Env (first non-empty wins):
+ * Env (first non-empty, non-localhost wins):
  *   GALLERY_PUBLIC_URL — preferred for live client links (set on the VPS)
  *   PUBLIC_GALLERY_URL — alias
- *   FRONTEND_URL — legacy; ignored in production when localhost
+ *   FRONTEND_URL — legacy; skipped when localhost
  *
- * Production fallback when only localhost is configured:
+ * Fallback when only localhost (or nothing) is configured:
  *   GALLERY_PUBLIC_URL_FALLBACK (default https://gidophotography.com)
+ *
+ * Set GALLERY_USE_LOCALHOST_LINKS=true only for local gallery testing.
  */
 
 const LOCALHOST_RE =
@@ -33,6 +35,24 @@ function isProduction() {
  * Origin used for `/share/:id` links sent to clients.
  * @returns {string}
  */
+function galleryPublicUrlFallback() {
+    return (
+        normalizeBaseUrl(process.env.GALLERY_PUBLIC_URL_FALLBACK) ||
+        DEFAULT_PRODUCTION_GALLERY_BASE
+    )
+}
+
+function localhostGalleryBase() {
+    return normalizeBaseUrl(process.env.FRONTEND_URL) || "http://localhost:3000"
+}
+
+function allowLocalhostGalleryLinks() {
+    const v = String(process.env.GALLERY_USE_LOCALHOST_LINKS || "")
+        .trim()
+        .toLowerCase()
+    return v === "1" || v === "true" || v === "yes"
+}
+
 export function resolveGalleryPublicBaseUrl() {
     const candidates = [
         process.env.GALLERY_PUBLIC_URL,
@@ -43,18 +63,15 @@ export function resolveGalleryPublicBaseUrl() {
         .filter(Boolean)
 
     for (const url of candidates) {
-        if (isProduction() && isLocalDevUrl(url)) continue
+        if (isLocalDevUrl(url)) continue
         return url
     }
 
-    if (isProduction()) {
-        return (
-            normalizeBaseUrl(process.env.GALLERY_PUBLIC_URL_FALLBACK) ||
-            DEFAULT_PRODUCTION_GALLERY_BASE
-        )
+    if (allowLocalhostGalleryLinks()) {
+        return localhostGalleryBase()
     }
 
-    return normalizeBaseUrl(process.env.FRONTEND_URL) || "http://localhost:3000"
+    return galleryPublicUrlFallback()
 }
 
 /**
@@ -73,18 +90,20 @@ export const buildGalleryShareUrl = (folder) => {
     return `${base}/${pathSeg}/${id}`
 }
 
-/** Logged at startup when production would have used a localhost FRONTEND_URL. */
+/** Logged at startup when client links would not use FRONTEND_URL as-is. */
 export function galleryUrlConfigWarning() {
     const frontend = normalizeBaseUrl(process.env.FRONTEND_URL)
     const gallery = normalizeBaseUrl(process.env.GALLERY_PUBLIC_URL)
-    if (!isProduction()) return null
-    if (gallery) return null
-    if (frontend && isLocalDevUrl(frontend)) {
-        const resolved = resolveGalleryPublicBaseUrl()
-        return (
-            `FRONTEND_URL is ${frontend} but NODE_ENV=production — client gallery/SMS links use ${resolved} instead. ` +
-            "Set GALLERY_PUBLIC_URL on the server to your live gallery origin (e.g. https://gidophotography.com)."
-        )
-    }
-    return null
+    if (gallery && !isLocalDevUrl(gallery)) return null
+    if (!frontend || !isLocalDevUrl(frontend)) return null
+    if (allowLocalhostGalleryLinks()) return null
+
+    const resolved = resolveGalleryPublicBaseUrl()
+    const envNote = isProduction()
+        ? "NODE_ENV=production"
+        : "GALLERY_USE_LOCALHOST_LINKS is not set"
+    return (
+        `FRONTEND_URL is ${frontend} (${envNote}) — client gallery/SMS links use ${resolved} instead. ` +
+        "Set GALLERY_PUBLIC_URL to your live gallery origin (e.g. https://gidophotography.com)."
+    )
 }
