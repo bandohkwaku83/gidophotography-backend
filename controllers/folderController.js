@@ -37,6 +37,10 @@ import {
     getEffectiveMaxClientSelections,
     parseMaxClientSelectionsInput,
 } from "../utils/maxClientSelections.js"
+import {
+    galleryCollectionFieldsFromFolder,
+    parseGalleryCollectionLabel,
+} from "../utils/galleryCollections.js"
 
 const SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/
 
@@ -102,8 +106,10 @@ const serializeFolder = (req, folder) => {
         ...(obj.share || {}),
         maxClientSelections,
     }
+    const galleryCollections = galleryCollectionFieldsFromFolder(obj)
     return {
         ...obj,
+        ...galleryCollections,
         share,
         maxClientSelections,
         status: obj.status || "draft",
@@ -122,7 +128,10 @@ const serializeFolder = (req, folder) => {
 }
 
 async function buildFolderDetailPayload(req, folder) {
-    const media = await getFolderMediaCollections(req, folder._id)
+    const galleryConfig = galleryCollectionFieldsFromFolder(folder)
+    const media = await getFolderMediaCollections(req, folder._id, {
+        galleryConfig,
+    })
     const { listFolderSetsForFolder } = await import("./folderSetController.js")
     const setsPayload = await listFolderSetsForFolder(folder._id)
     return {
@@ -132,6 +141,10 @@ async function buildFolderDetailPayload(req, folder) {
             ...setsPayload,
         },
     }
+}
+
+export async function getFolderDetailPayload(req, folder) {
+    return buildFolderDetailPayload(req, folder)
 }
 
 export const createFolder = async (req, res) => {
@@ -974,6 +987,61 @@ export const unlockFinalDelivery = async (req, res) => {
     }
 }
 
+export const patchGalleryCollections = async (req, res) => {
+    try {
+        const { id } = req.params
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: "Invalid folder id" })
+        }
+
+        const folder = await Folder.findOne({ _id: id, deletedAt: null })
+        if (!folder) {
+            return res.status(404).json({ message: "Folder not found" })
+        }
+
+        if (
+            !Object.prototype.hasOwnProperty.call(req.body ?? {}, "allMediaLabel") &&
+            !Object.prototype.hasOwnProperty.call(req.body ?? {}, "generalSetLabel")
+        ) {
+            return res.status(400).json({
+                message: "Provide allMediaLabel and/or generalSetLabel",
+            })
+        }
+
+        try {
+            if (Object.prototype.hasOwnProperty.call(req.body, "allMediaLabel")) {
+                folder.allMediaLabel = parseGalleryCollectionLabel(
+                    req.body.allMediaLabel,
+                    "allMediaLabel"
+                )
+            }
+            if (Object.prototype.hasOwnProperty.call(req.body, "generalSetLabel")) {
+                folder.generalSetLabel = parseGalleryCollectionLabel(
+                    req.body.generalSetLabel,
+                    "generalSetLabel"
+                )
+            }
+        } catch (e) {
+            if (e.status) {
+                return res.status(e.status).json({ message: e.message })
+            }
+            throw e
+        }
+
+        await folder.save()
+
+        const payload = await buildFolderDetailPayload(req, folder)
+        return res.status(200).json({
+            message: "Collection labels updated",
+            ...galleryCollectionFieldsFromFolder(folder),
+            ...payload,
+        })
+    } catch (error) {
+        console.error("Patch gallery collections error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
 export const getSharedFolder = async (req, res) => {
     try {
         const { identifier } = req.params
@@ -1000,8 +1068,10 @@ export const getSharedFolder = async (req, res) => {
         await folder.save()
 
         const settings = await Settings.getSingleton()
+        const galleryConfig = galleryCollectionFieldsFromFolder(folder)
         const media = await getFolderMediaCollections(req, folder._id, {
             clientGallery: Boolean(settings.watermarkPreviewImages),
+            galleryConfig,
         })
         const { listFolderSetsForFolder } = await import("./folderSetController.js")
         const setsPayload = await listFolderSetsForFolder(folder._id)
@@ -1016,6 +1086,7 @@ export const getSharedFolder = async (req, res) => {
             items: (bucket.items || []).map((f) => finalById.get(String(f._id)) || f),
         }))
         const maxClientSelections = getEffectiveMaxClientSelections(obj.share)
+        const galleryCollections = galleryCollectionFieldsFromFolder(obj)
         const focalX = normalizeStoredFocal(obj.coverFocalX)
         const focalY = normalizeStoredFocal(obj.coverFocalY)
         const bgmEnabled = obj.backgroundMusicEnabled !== false
@@ -1068,6 +1139,7 @@ export const getSharedFolder = async (req, res) => {
                     selected: media.selection.length,
                     finals: finals.length,
                 },
+                ...galleryCollections,
                 ...setsPayload,
                 uploads: media.uploads,
                 selection: media.selection,

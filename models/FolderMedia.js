@@ -49,6 +49,11 @@ const folderMediaSchema = new mongoose.Schema(
             type: Number,
             default: 0,
         },
+        /** Manual gallery order within kind (+ set). Omitted/null = fall back to createdAt. */
+        sortOrder: {
+            type: Number,
+            default: null,
+        },
         rawMediaId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "FolderMedia",
@@ -63,11 +68,6 @@ const folderMediaSchema = new mongoose.Schema(
             type: String,
             enum: EDIT_STATUSES,
             default: "pending",
-        },
-        /** Display order within folder + set + kind (lower = shown first). */
-        sortOrder: {
-            type: Number,
-            default: null,
         },
         /** Trash (soft-delete). Omitted/`null` = active in galleries. */
         deletedAt: { type: Date, default: null, index: true },
@@ -84,7 +84,6 @@ const folderMediaSchema = new mongoose.Schema(
 )
 
 folderMediaSchema.index({ folder: 1, kind: 1, createdAt: 1 })
-folderMediaSchema.index({ folder: 1, set: 1, kind: 1, sortOrder: 1, createdAt: 1 })
 folderMediaSchema.index({ folder: 1, deletedAt: 1 })
 
 const FolderMedia = mongoose.model("FolderMedia", folderMediaSchema)

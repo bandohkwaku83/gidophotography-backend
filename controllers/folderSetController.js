@@ -3,6 +3,8 @@ import Folder from "../models/Folder.js"
 import FolderSet from "../models/FolderSet.js"
 import FolderMedia from "../models/FolderMedia.js"
 import { appendMediaToSetBucketEnd } from "../utils/mediaSortOrder.js"
+import { galleryCollectionFieldsFromFolder } from "../utils/galleryCollections.js"
+import { getFolderMediaCollections } from "./folderMediaController.js"
 
 const ACTIVE_MEDIA_MATCH = { deletedAt: null }
 
@@ -289,6 +291,102 @@ export const deleteFolderSet = async (req, res) => {
         })
     } catch (error) {
         console.error("Delete folder set error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+export const reorderFolderSets = async (req, res) => {
+    try {
+        const { id } = req.params
+        const check = await assertFolder(id)
+        if (check.error) {
+            return res.status(check.error.status).json({ message: check.error.message })
+        }
+        const { folder } = check
+
+        const orderedKeys = req.body?.orderedKeys
+        if (!Array.isArray(orderedKeys) || orderedKeys.length === 0) {
+            return res.status(400).json({
+                message: "orderedKeys must be a non-empty array",
+            })
+        }
+
+        const normalized = orderedKeys.map((k) => String(k).trim())
+        const unique = new Set(normalized)
+        if (unique.size !== normalized.length) {
+            return res.status(400).json({ message: "orderedKeys must not contain duplicates" })
+        }
+
+        const generalCount = normalized.filter((k) => k === "general").length
+        if (generalCount !== 1) {
+            return res.status(400).json({
+                message: 'orderedKeys must include exactly one "general" entry',
+            })
+        }
+
+        const setKeys = normalized.filter((k) => k !== "general")
+        for (const key of setKeys) {
+            if (!mongoose.Types.ObjectId.isValid(key)) {
+                return res.status(400).json({ message: `Invalid set id: ${key}` })
+            }
+        }
+
+        const activeSets = await FolderSet.find({ folder: id, deletedAt: null }).select(
+            "_id"
+        )
+        const activeSetIds = new Set(activeSets.map((s) => String(s._id)))
+
+        if (setKeys.length !== activeSetIds.size) {
+            return res.status(400).json({
+                message:
+                    "orderedKeys must list every named collection on this folder plus general exactly once",
+            })
+        }
+        for (const key of setKeys) {
+            if (!activeSetIds.has(key)) {
+                return res.status(400).json({
+                    message: "One or more set ids do not belong to this folder",
+                })
+            }
+        }
+
+        const setBulk = []
+        for (let i = 0; i < normalized.length; i++) {
+            const key = normalized[i]
+            if (key === "general") {
+                folder.generalSetSortOrder = i
+            } else {
+                setBulk.push({
+                    updateOne: {
+                        filter: { _id: key, folder: id, deletedAt: null },
+                        update: { $set: { sortOrder: i } },
+                    },
+                })
+            }
+        }
+
+        await folder.save()
+        if (setBulk.length) {
+            await FolderSet.bulkWrite(setBulk)
+        }
+
+        const setsPayload = await buildSetsPayload(id)
+        const media = await getFolderMediaCollections(req, id, {
+            galleryConfig: galleryCollectionFieldsFromFolder(folder),
+        })
+
+        return res.status(200).json({
+            message: "Collection order updated",
+            updatedCount: normalized.length,
+            generalSetSortOrder: folder.generalSetSortOrder,
+            ...galleryCollectionFieldsFromFolder(folder),
+            sets: setsPayload.sets,
+            uploadsBySet: media.uploadsBySet,
+            finalsBySet: media.finalsBySet,
+            selectionBySet: media.selectionBySet,
+        })
+    } catch (error) {
+        console.error("Reorder folder sets error:", error)
         return res.status(500).json({ message: "Server error" })
     }
 }

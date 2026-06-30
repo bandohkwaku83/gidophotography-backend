@@ -91,6 +91,23 @@ const folderSchema = new mongoose.Schema(
             outstandingAmountGHS: { type: Number, default: null },
             imagesLocked: { type: Boolean, default: false },
         },
+        /** Custom label for the virtual “show everything” tab (dashboard / client). */
+        allMediaLabel: {
+            type: String,
+            trim: true,
+            default: "",
+        },
+        /** Custom label for uncategorized media (setId: null). */
+        generalSetLabel: {
+            type: String,
+            trim: true,
+            default: "",
+        },
+        /** Tab sort position of General among collection buckets (named sets use FolderSet.sortOrder). */
+        generalSetSortOrder: {
+            type: Number,
+            default: -1,
+        },
         /** Set when gallery is deleted; restore within SOFT_DELETE_RETENTION_DAYS before purge cron removes permanently. */
         deletedAt: { type: Date, default: null, index: true },
     },

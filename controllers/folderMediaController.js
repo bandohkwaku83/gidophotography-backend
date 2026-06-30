@@ -57,10 +57,11 @@ import {
     isWithinRestoreWindow,
     restoreDeadlineISO,
 } from "../utils/softDelete.js"
+import { reorderFolderMediaBucket } from "../utils/mediaSortOrder.js"
 import {
-    allocateSortOrders,
-    reorderFolderMediaBucket,
-} from "../utils/mediaSortOrder.js"
+    buildOrderedSetBuckets,
+    galleryCollectionFieldsFromFolder,
+} from "../utils/galleryCollections.js"
 
 const FOLDER_COLL = Folder.collection.name
 
@@ -191,13 +192,13 @@ const loadActiveSharedFolder = async (identifier) => {
 export const getFolderMediaCollections = async (
     req,
     folderId,
-    { clientGallery = false } = {}
+    { clientGallery = false, galleryConfig } = {}
 ) => {
     const rawSelect =
-        "_id set sortOrder filePath displayFilePath thumbPath originalFilename mimeType size createdAt"
+        "_id set filePath displayFilePath thumbPath originalFilename mimeType size sortOrder createdAt"
     const selectionSelect = "_id set editStatus rawMediaId createdAt updatedAt"
     const finalSelect =
-        "_id set sortOrder filePath thumbPath originalFilename mimeType size selectionMediaId createdAt"
+        "_id set filePath thumbPath originalFilename mimeType size selectionMediaId sortOrder createdAt"
 
     const setSelect = "_id name sortOrder createdAt updatedAt"
 
@@ -229,59 +230,25 @@ export const getFolderMediaCollections = async (
     const rawOpts = { maskOriginalWithDisplay: clientGallery }
     const selOpts = { maskNestedRaw: clientGallery }
 
+    const collectionConfig = galleryConfig ?? {}
+
     const uploads = rawDocs.map((d) => serializeRawUpload(req, d, rawOpts))
     const selection = selectionDocs.map((d) => serializeSelection(req, d, selOpts))
     const finals = finalDocs.map((d) => serializeFinal(req, d))
 
-    const sortMediaItems = (items) =>
-        [...items].sort((a, b) => {
-            const orderDiff = (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
-            if (orderDiff !== 0) return orderDiff
-            return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-        })
+    const buildBucket = (items, { sortItems = false } = {}) =>
+        buildOrderedSetBuckets(items, setDocs, collectionConfig)
 
-    const buildBucket = (items, { sortItems = false } = {}) => {
-        const bySetId = new Map()
-        for (const s of setDocs) {
-            bySetId.set(String(s._id), {
-                setId: String(s._id),
-                name: s.name,
-                sortOrder: s.sortOrder ?? 0,
-                items: [],
-            })
-        }
-        const general = {
-            setId: null,
-            name: "General",
-            sortOrder: -1,
-            items: [],
-        }
-        for (const item of items) {
-            const sid = item?.setId ?? null
-            if (sid && bySetId.has(String(sid))) {
-                bySetId.get(String(sid)).items.push(item)
-            } else {
-                general.items.push(item)
-            }
-        }
-        const buckets = [general, ...[...bySetId.values()]]
-        if (sortItems) {
-            for (const bucket of buckets) {
-                bucket.items = sortMediaItems(bucket.items)
-            }
-        }
-        return buckets
-    }
-
-    const uploadsBySet = buildBucket(uploads, { sortItems: true })
-    const finalsBySet = buildBucket(finals, { sortItems: true })
+    const uploadsBySet = buildBucket(uploads)
+    const finalsBySet = buildBucket(finals)
+    const selectionBySet = buildBucket(selection)
 
     return {
         uploads: uploadsBySet.flatMap((b) => b.items),
         selection,
         finals: finalsBySet.flatMap((b) => b.items),
         uploadsBySet,
-        selectionBySet: buildBucket(selection),
+        selectionBySet,
         finalsBySet,
     }
 }
@@ -408,13 +375,7 @@ async function replaceExistingFinalMedia(
         existingDoc.selectionMediaId = selectionMediaIdUpdate
     }
     if (setIdUpdate !== undefined) {
-        const prevSet = existingDoc.set ? String(existingDoc.set) : null
-        const nextSet = setIdUpdate ? String(setIdUpdate) : null
         existingDoc.set = setIdUpdate
-        if (prevSet !== nextSet) {
-            const [nextSort] = await allocateSortOrders(folderId, "final", setIdUpdate, 1)
-            existingDoc.sortOrder = nextSort
-        }
     }
 
     await finalizeRasterThumbnail(existingDoc, f, false, undefined)
@@ -562,19 +523,6 @@ export const uploadRawMedia = async (req, res) => {
         const replacedDocs = []
         const mediaOut = []
 
-        let newUploadCount = 0
-        for (const f of fileParts) {
-            const dupKey = basenameDuplicateKey(f.originalname)
-            if (!dupByBasename.get(dupKey)) newUploadCount += 1
-        }
-        const nextSortOrders = await allocateSortOrders(
-            id,
-            "raw",
-            uploadSetId,
-            newUploadCount
-        )
-        let nextSortIdx = 0
-
         for (const f of fileParts) {
             const dupKey = basenameDuplicateKey(f.originalname)
             const existing = dupByBasename.get(dupKey)
@@ -611,7 +559,6 @@ export const uploadRawMedia = async (req, res) => {
                 folder: id,
                 kind: "raw",
                 set: uploadSetId,
-                sortOrder: nextSortOrders[nextSortIdx++],
                 filePath,
                 displayFilePath: "",
                 originalFilename: f.originalname,
@@ -840,19 +787,6 @@ export const uploadFinalMedia = async (req, res) => {
             uploadSetId
         )
 
-        let newUploadCount = 0
-        for (const f of fileParts) {
-            const dupKey = basenameDuplicateKey(f.originalname)
-            if (!dupByBasename.get(dupKey)) newUploadCount += 1
-        }
-        const nextSortOrders = await allocateSortOrders(
-            id,
-            "final",
-            uploadSetId,
-            newUploadCount
-        )
-        let nextSortIdx = 0
-
         for (const f of fileParts) {
             const dupKey = basenameDuplicateKey(f.originalname)
             const existing = dupByBasename.get(dupKey)
@@ -885,7 +819,6 @@ export const uploadFinalMedia = async (req, res) => {
                 folder: id,
                 kind: "final",
                 set: uploadSetId,
-                sortOrder: nextSortOrders[nextSortIdx++],
                 filePath,
                 originalFilename: f.originalname,
                 mimeType: f.mimetype,
@@ -1166,7 +1099,9 @@ export const reorderFolderMedia = async (req, res) => {
             throw e
         }
 
-        const media = await getFolderMediaCollections(req, id)
+        const media = await getFolderMediaCollections(req, id, {
+            galleryConfig: galleryCollectionFieldsFromFolder(folder),
+        })
         return res.status(200).json({
             message: "Media order updated",
             updatedCount: result.updatedCount,
@@ -1479,6 +1414,7 @@ export const syncClientSelections = async (req, res) => {
         const settings = await Settings.getSingleton()
         const media = await getFolderMediaCollections(req, folder._id, {
             clientGallery: Boolean(settings.watermarkPreviewImages),
+            galleryConfig: galleryCollectionFieldsFromFolder(folder),
         })
 
         return res.status(200).json({

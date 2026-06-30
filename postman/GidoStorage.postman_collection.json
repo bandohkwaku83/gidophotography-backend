@@ -1102,7 +1102,7 @@
 							"host": ["{{baseUrl}}"],
 							"path": ["api", "folders", "{{folderId}}"]
 						},
-						"description": "Returns folder details plus uploads, selection, finals, and set metadata. share.maxClientSelections (and top-level maxClientSelections): null = unlimited, number = max client picks. Each raw/final item includes setId and sortOrder; arrays are sorted by sortOrder ascending within each set bucket. Also includes uploadsBySet, selectionBySet, finalsBySet buckets (with General for uncategorized) plus set counts: rawCount, selectionCount, finalCount."
+						"description": "Returns folder details plus uploads, selection, finals, and set metadata. Includes allMediaLabel, generalSetLabel, generalSetSortOrder for collection tabs. Each raw/final item includes setId and sortOrder. uploadsBySet / finalsBySet bucket order follows generalSetSortOrder + sets[].sortOrder; media inside each bucket is sorted by sortOrder."
 					}
 				},
 				{
@@ -1173,6 +1173,46 @@
 							"path": ["api", "folders", "{{folderId}}", "sets", "{{setId}}"]
 						},
 						"description": "Soft-deletes a set and moves its linked media to General (setId = null)."
+					}
+				},
+				{
+					"name": "Rename gallery collection tabs (admin)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"allMediaLabel\": \"Full gallery\",\n    \"generalSetLabel\": \"Highlights\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/gallery-collections",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "gallery-collections"]
+						},
+						"description": "Custom labels for the virtual All media tab and the General (uncategorized) collection. Omitted fields unchanged; empty strings rejected (400). Max 80 chars. Returned on folder GET and public share GET."
+					}
+				},
+				{
+					"name": "Reorder gallery collections (admin)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" },
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"orderedKeys\": [\"general\", \"{{setId}}\"]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/folders/{{folderId}}/sets/reorder",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "folders", "{{folderId}}", "sets", "reorder"]
+						},
+						"description": "Drag order for General + named sets (not the All media tab). orderedKeys: \"general\" plus every set _id exactly once. Writes generalSetSortOrder and sets[].sortOrder as 0,1,2… Rebuilds uploadsBySet / finalsBySet bucket order on folder + share GETs."
 					}
 				},
 				{

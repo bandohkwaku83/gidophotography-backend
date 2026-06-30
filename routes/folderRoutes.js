@@ -17,12 +17,14 @@ import {
     lockFinalDelivery,
     uploadFolderBackgroundMusic,
     deleteFolderBackgroundMusic,
+    patchGalleryCollections,
 } from "../controllers/folderController.js"
 import {
     listFolderSets,
     createFolderSet,
     updateFolderSet,
     deleteFolderSet,
+    reorderFolderSets,
 } from "../controllers/folderSetController.js"
 import {
     uploadRawMedia,
@@ -62,11 +64,13 @@ router.post("/:id/restore", restoreFolder)
 router.post("/:id/media/:mediaId/restore", restoreFolderMedia)
 
 router.get("/:id/sets", listFolderSets)
+router.patch("/:id/sets/reorder", reorderFolderSets)
 router.post("/:id/sets", createFolderSet)
 router.patch("/:id/sets/:setId", updateFolderSet)
 router.delete("/:id/sets/:setId", deleteFolderSet)
 
 router.post("/:id/media/duplicate-preview", previewUploadDuplicates)
+router.patch("/:id/gallery-collections", patchGalleryCollections)
 router.patch("/:id/media/reorder", reorderFolderMedia)
 router.post("/:id/media/raw", uploadFolderRaw, uploadRawMedia)
 router.post("/:id/media/final", uploadFolderFinal, uploadFinalMedia)
