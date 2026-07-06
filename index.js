@@ -19,6 +19,7 @@ import dashboardRoutes from "./routes/dashboardRoutes.js"
 import usageRoutes from "./routes/usageRoutes.js"
 import smsRoutes from "./routes/smsRoutes.js"
 import bookingRoutes from "./routes/bookingRoutes.js"
+import invoiceRoutes from "./routes/invoiceRoutes.js"
 import notificationRoutes from "./routes/notificationRoutes.js"
 import { mongoUrlFromEnv } from "./utils/mongoUrlFromEnv.js"
 import { buildCorsMiddleware } from "./utils/corsMiddleware.js"
@@ -86,6 +87,7 @@ app.use("/api/dashboard", dashboardRoutes)
 app.use("/api/usage", usageRoutes)
 app.use("/api/sms", smsRoutes)
 app.use("/api/bookings", bookingRoutes)
+app.use("/api/invoices", invoiceRoutes)
 app.use("/api/notifications", notificationRoutes)
 
 app.use((err, req, res, next) => {

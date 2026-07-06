@@ -1,7 +1,7 @@
 {
 	"info": {
 		"name": "GidoStorage Backend",
-		"description": "Auth, clients, bookings (calendar / schedule), folders, dashboard, settings, share (public), SMS (Arkesel), in-app notifications (admin). Bookings: GET /api/bookings/meta, summary/week, list ?year=&month=, POST create, GET one, PUT or PATCH edit (partial), DELETE remove. Unpaid final SMS defaults, final-delivery upload fields, PATCH .../final-delivery/lock (lock finals anytime) and .../unlock. Raw watermarking when settings.watermarkPreviewImages is true. Notifications: GET/PATCH /api/notifications (role admin).",
+		"description": "Auth, clients, bookings (calendar / schedule), invoices, folders, dashboard, settings, share (public), SMS (Arkesel), in-app notifications (admin). Bookings: GET /api/bookings/meta, summary/week, list ?year=&month=, POST create (optional amountGHS), GET one, PUT or PATCH edit (partial), DELETE remove. Invoices: GET /api/invoices/meta, list, POST create, GET one, PUT/PATCH update, DELETE. Unpaid final SMS defaults, final-delivery upload fields, PATCH .../final-delivery/lock (lock finals anytime) and .../unlock. Raw watermarking when settings.watermarkPreviewImages is true. Notifications: GET/PATCH /api/notifications (role admin).",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
@@ -22,6 +22,11 @@
 		},
 		{
 			"key": "bookingId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "invoiceId",
 			"value": "",
 			"type": "string"
 		},
@@ -615,7 +620,7 @@
 						],
 						"body": {
 							"mode": "raw",
-							"raw": "{\n    \"title\": \"Styled editorial\",\n    \"clientId\": \"{{clientId}}\",\n    \"date\": \"2026-05-29\",\n    \"shootType\": \"Other\",\n    \"start\": \"09:00 AM\",\n    \"end\": \"\",\n    \"location\": \"Downtown loft\",\n    \"description\": \"Magazine pitch\"\n}"
+							"raw": "{\n    \"title\": \"Styled editorial\",\n    \"clientId\": \"{{clientId}}\",\n    \"date\": \"2026-05-29\",\n    \"shootType\": \"Other\",\n    \"start\": \"09:00 AM\",\n    \"end\": \"\",\n    \"location\": \"Downtown loft\",\n    \"description\": \"Magazine pitch\",\n    \"amountGHS\": 1200\n}"
 						},
 						"url": {
 							"raw": "{{baseUrl}}/api/bookings",
@@ -692,6 +697,130 @@
 							"path": ["api", "bookings", "{{bookingId}}"]
 						},
 						"description": "Permanently removes the booking for the logged-in creator. Response: message, deletedId, booking (last snapshot for UI cache)."
+					}
+				}
+			]
+		},
+		{
+			"name": "Invoices",
+			"item": [
+				{
+					"name": "Invoice meta (next number preview)",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/invoices/meta",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "invoices", "meta"]
+						}
+					}
+				},
+				{
+					"name": "List invoices",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/invoices?bookingId=",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "invoices"],
+							"query": [
+								{ "key": "bookingId", "value": "", "description": "optional" },
+								{ "key": "clientId", "value": "", "disabled": true },
+								{ "key": "from", "value": "", "disabled": true },
+								{ "key": "to", "value": "", "disabled": true }
+							]
+						},
+						"description": "Newest first. Optional filters: bookingId, clientId, from/to (invoiceDateISO YYYY-MM-DD)."
+					}
+				},
+				{
+					"name": "Create invoice",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"type": "text/javascript",
+								"exec": [
+									"if (pm.response.code === 201) {",
+									"    const d = pm.response.json();",
+									"    if (d.invoice && d.invoice._id) {",
+									"        pm.collectionVariables.set('invoiceId', d.invoice._id);",
+									"    }",
+									"}"
+								]
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"bookingId\": \"{{bookingId}}\",\n    \"title\": \"Styled editorial invoice\",\n    \"shootType\": \"Other\",\n    \"shootDateISO\": \"2026-05-29\",\n    \"billTo\": { \"name\": \"Jane Client\", \"address\": \"Accra\" },\n    \"billedFrom\": {\n        \"name\": \"Gido Photography\",\n        \"email\": \"hello@example.com\",\n        \"phone\": \"+233...\",\n        \"website\": \"https://example.com\",\n        \"address\": \"Accra, Ghana\"\n    },\n    \"items\": [\n        { \"description\": \"Styled editorial — Other\", \"quantity\": 1, \"unitPriceGHS\": 1200 }\n    ],\n    \"amountPayingGHS\": 0,\n    \"notes\": \"Thank you for your business.\",\n    \"taxRate\": 0\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/invoices",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "invoices"]
+						},
+						"description": "Server assigns invoiceNo and recomputes totals/payment fields. bookingId optional but must belong to logged-in photographer."
+					}
+				},
+				{
+					"name": "Get one invoice",
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/invoices/{{invoiceId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "invoices", "{{invoiceId}}"]
+						}
+					}
+				},
+				{
+					"name": "Patch invoice (partial payment)",
+					"request": {
+						"method": "PATCH",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"amountPayingGHS\": 1200\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/invoices/{{invoiceId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "invoices", "{{invoiceId}}"]
+						},
+						"description": "Recomputes paymentStatus (paid when amountPayingGHS >= totalGHS). invoiceNo and invoiceDateISO are preserved."
+					}
+				},
+				{
+					"name": "Delete invoice",
+					"request": {
+						"method": "DELETE",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/invoices/{{invoiceId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "invoices", "{{invoiceId}}"]
+						}
 					}
 				}
 			]

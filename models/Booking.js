@@ -56,6 +56,12 @@ const bookingSchema = new mongoose.Schema(
             min: 0,
             default: 0,
         },
+        /** Agreed shoot fee in Ghana cedis (optional). */
+        amountGHS: {
+            type: Number,
+            min: 0,
+            default: null,
+        },
         currency: {
             type: String,
             trim: true,

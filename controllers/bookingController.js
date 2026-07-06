@@ -66,6 +66,10 @@ export function serializeBooking(doc) {
             o.amountCharged != null && Number.isFinite(Number(o.amountCharged))
                 ? Number(o.amountCharged)
                 : 0,
+        amountGHS:
+            o.amountGHS != null && Number.isFinite(Number(o.amountGHS))
+                ? roundGhs(Number(o.amountGHS))
+                : null,
         currency: (o.currency || "GHS").trim() || "GHS",
         createdAt: o.createdAt,
         updatedAt: o.updatedAt,
@@ -82,6 +86,29 @@ function readCurrency(body) {
     if (body.currency === undefined) return undefined
     const c = String(body.currency ?? "").trim().toUpperCase()
     return c || "GHS"
+}
+
+function roundGhs(n) {
+    return Math.round(n * 100) / 100
+}
+
+/**
+ * @param {object} body
+ * @returns {{ provided: boolean, value?: number | null, invalid?: boolean }}
+ */
+function parseAmountGHS(body) {
+    if (
+        !Object.prototype.hasOwnProperty.call(body, "amountGHS") &&
+        !Object.prototype.hasOwnProperty.call(body, "amount_ghs")
+    ) {
+        return { provided: false }
+    }
+    const raw = body.amountGHS ?? body.amount_ghs
+    if (raw === null || raw === "") return { provided: true, value: null }
+    const n =
+        typeof raw === "number" ? raw : Number(String(raw).trim().replace(/,/g, ""))
+    if (!Number.isFinite(n) || n < 0) return { provided: true, invalid: true }
+    return { provided: true, value: roundGhs(n) }
 }
 
 /**
@@ -422,9 +449,16 @@ export const createBooking = async (req, res) => {
             })
         }
 
+        const amountGhsParsed = parseAmountGHS(body)
+        if (amountGhsParsed.invalid) {
+            return res.status(400).json({
+                message: "amountGHS must be a non-negative number",
+            })
+        }
+
         const currency = readCurrency(body) ?? "GHS"
 
-        const doc = await Booking.create({
+        const createPayload = {
             title,
             client: clientId,
             category: typeNorm.category,
@@ -437,7 +471,12 @@ export const createBooking = async (req, res) => {
             amountCharged: amountParsed.provided ? (amountParsed.value ?? 0) : 0,
             currency,
             createdBy: req.user?._id,
-        })
+        }
+        if (amountGhsParsed.provided) {
+            createPayload.amountGHS = amountGhsParsed.value
+        }
+
+        const doc = await Booking.create(createPayload)
         await doc.populate(CLIENT_POPULATE)
 
         return res.status(201).json({
@@ -510,6 +549,16 @@ export const updateBooking = async (req, res) => {
                 })
             }
             updates.amountCharged = amountParsed.value
+        }
+
+        const amountGhsParsed = parseAmountGHS(body)
+        if (amountGhsParsed.provided) {
+            if (amountGhsParsed.invalid) {
+                return res.status(400).json({
+                    message: "amountGHS must be a non-negative number",
+                })
+            }
+            updates.amountGHS = amountGhsParsed.value
         }
 
         if (body.shootType !== undefined) {
