@@ -50,10 +50,12 @@ function lockedOverlaySvg(width, height) {
 /**
  * Streams a downscaled, watermarked JPEG to the response (best-effort protection
  * vs serving originals while payment is pending; screenshots cannot be blocked in HTTP).
+ * `mark` draws the folder logo on top when the gallery mark is on.
  * @param {import("express").Response} res
  * @param {Buffer} imageBuffer
+ * @param {{ logoPath: string, position?: string, size?: number, opacity?: number, inset?: number, plate?: boolean } | null} [mark]
  */
-export async function pipeLockedFinalJpegToResponse(res, imageBuffer) {
+export async function pipeLockedFinalJpegToResponse(res, imageBuffer, mark = null) {
     const pipeline = sharp(imageBuffer, {
         failOn: "none",
         limitInputPixels: 268_402_689,
@@ -79,9 +81,28 @@ export async function pipeLockedFinalJpegToResponse(res, imageBuffer) {
     res.setHeader("Cache-Control", "private, no-store")
     res.setHeader("X-Content-Type-Options", "nosniff")
 
-    const out = await sharp(data)
+    let composed = await sharp(data)
         .composite([{ input: overlay, blend: "over" }])
-        .jpeg({ quality: 82, mozjpeg: true })
+        .png()
+        .toBuffer()
+        .catch(() => null)
+    if (!composed) return false
+
+    if (mark?.logoPath) {
+        try {
+            const { compositeGalleryMarkBuffer } = await import("./galleryMark.js")
+            composed = await compositeGalleryMarkBuffer(
+                composed,
+                mark.logoPath,
+                mark
+            )
+        } catch (error) {
+            console.warn("Gallery mark on locked preview skipped:", error?.message)
+        }
+    }
+
+    const out = await sharp(composed)
+        .jpeg({ quality: 82, mozjpeg: true, progressive: true })
         .toBuffer()
         .catch(() => null)
 

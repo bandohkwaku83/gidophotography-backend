@@ -32,10 +32,41 @@ const folderMediaSchema = new mongoose.Schema(
             type: String,
             default: "",
         },
-        /** WebP thumbnail (e.g. max 800px edge); grid/list URLs should prefer this over `filePath`. */
+        /** WebP grid image. Points at one `variants` file (closest to the thumb edge). */
         thumbPath: {
             type: String,
             default: "",
+        },
+        /** Oriented pixel size. Use with `height` so the page can reserve space before the file loads. */
+        width: { type: Number, default: 0 },
+        height: { type: Number, default: 0 },
+        /** Short BlurHash string. The gallery draws this blurred, then fades in the real photo. */
+        blurHash: { type: String, default: "" },
+        /**
+         * WebP copies at a few widths for srcset. The original `filePath` is unchanged.
+         */
+        variants: {
+            type: [
+                {
+                    _id: false,
+                    width: { type: Number, required: true },
+                    path: { type: String, required: true },
+                },
+            ],
+            default: [],
+        },
+        /** Logo-stamped copy of a final still. Client view and downloads use this when the folder mark is on. */
+        markedFilePath: { type: String, default: "" },
+        markedThumbPath: { type: String, default: "" },
+        markedVariants: {
+            type: [
+                {
+                    _id: false,
+                    width: { type: Number, required: true },
+                    path: { type: String, required: true },
+                },
+            ],
+            default: [],
         },
         originalFilename: {
             type: String,

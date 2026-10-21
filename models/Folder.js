@@ -91,6 +91,38 @@ const folderSchema = new mongoose.Schema(
             outstandingAmountGHS: { type: Number, default: null },
             imagesLocked: { type: Boolean, default: false },
         },
+        /**
+         * Per-folder logo stamped onto final stills for the client gallery and downloads.
+         * The admin grid keeps the clean original and may still draw its own preview.
+         */
+        galleryMark: {
+            enabled: { type: Boolean, default: false },
+            position: {
+                type: String,
+                enum: [
+                    "top-left",
+                    "top-center",
+                    "top-right",
+                    "middle-left",
+                    "center",
+                    "middle-right",
+                    "bottom-left",
+                    "bottom-center",
+                    "bottom-right",
+                ],
+                default: "bottom-right",
+            },
+            /** Logo width as a percent of the photo’s shorter side. */
+            size: { type: Number, default: 18, min: 8, max: 36 },
+            /** 15–100. Drawn at this percent. */
+            opacity: { type: Number, default: 90, min: 15, max: 100 },
+            /** Margin from the chosen edge, percent of the shorter side. Ignored for center. */
+            inset: { type: Number, default: 5, min: 2, max: 16 },
+            plate: { type: Boolean, default: true },
+            /** Stored logo file (`uploads/gallery-marks/...`). Never a data URL. */
+            logoPath: { type: String, default: "", trim: true },
+            logoName: { type: String, default: "", trim: true },
+        },
         /** Custom label for the virtual “show everything” tab (dashboard / client). */
         allMediaLabel: {
             type: String,

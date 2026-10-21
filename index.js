@@ -113,10 +113,13 @@ app.use((err, req, res, next) => {
         })
     }
     if (err && typeof err.message === "string") {
-        if (err.message.includes("Unsupported file type")) {
-            return res.status(400).json({ message: err.message })
-        }
-        if (err.message.includes("Only audio files are allowed")) {
+        if (
+            err.message.includes("Unsupported file type") ||
+            err.message.includes("Only audio files are allowed") ||
+            err.message.includes("Only image files are allowed") ||
+            err.message.includes("Gallery mark logo") ||
+            err.message.includes("Unexpected file field")
+        ) {
             return res.status(400).json({ message: err.message })
         }
     }

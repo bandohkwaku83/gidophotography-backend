@@ -22,6 +22,15 @@ import { FOLDER_STATUS_VALUES } from "../constants/folderStatus.js"
 import { buildGalleryShareUrl, resolveGalleryPublicBaseUrl } from "../utils/shareUrl.js"
 import { buildPublicAssetUrl } from "../utils/assetUrl.js"
 import {
+    assignGalleryMark,
+    galleryMarkStampKey,
+    GALLERY_MARK_LOGO_MAX_BYTES,
+    isGalleryMarkActive,
+    publicGalleryMark,
+    readGalleryMarkPatch,
+    restampFolderFinals,
+} from "../utils/galleryMark.js"
+import {
     isObjectStorageS3,
     uploadLocalFileThenRemove,
     deleteStoredAsset,
@@ -114,6 +123,7 @@ const serializeFolder = (req, folder) => {
         maxClientSelections,
         status: obj.status || "draft",
         coverImageUrl: buildPublicAssetUrl(req, obj.coverImage),
+        galleryMark: publicGalleryMark(req, obj),
         backgroundMusicUrl:
             bgmOn && obj.backgroundMusic
                 ? buildPublicAssetUrl(req, obj.backgroundMusic)
@@ -336,7 +346,27 @@ export const getFolder = async (req, res) => {
     }
 }
 
+function folderUpdateFiles(req) {
+    const files = req.files && !Array.isArray(req.files) ? req.files : {}
+    return {
+        cover: req.file || files.coverImage?.[0] || null,
+        logo:
+            files.galleryMarkLogo?.[0] ||
+            files.logo?.[0] ||
+            files.markLogo?.[0] ||
+            files.galleryMarkFile?.[0] ||
+            null,
+    }
+}
+
 export const updateFolder = async (req, res) => {
+    const { cover: coverFile, logo: logoFile } = folderUpdateFiles(req)
+    const unlinkTemps = () => {
+        if (coverFile) unlinkLocalTempFile(coverFile.path)
+        if (logoFile) unlinkLocalTempFile(logoFile.path)
+    }
+    let newLogoStoredPath = ""
+    let logoCommitted = false
     try {
         const { id } = req.params
         const {
@@ -349,24 +379,36 @@ export const updateFolder = async (req, res) => {
         } = req.body
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
-            if (req.file) unlinkLocalTempFile(req.file.path)
+            unlinkTemps()
             return res.status(400).json({ message: "Invalid folder id" })
         }
 
         const folder = await Folder.findOne({ _id: id, deletedAt: null })
         if (!folder) {
-            if (req.file) unlinkLocalTempFile(req.file.path)
+            unlinkTemps()
             return res.status(404).json({ message: "Folder not found" })
+        }
+
+        const markRead = readGalleryMarkPatch(req.body || {})
+        if (markRead.error) {
+            unlinkTemps()
+            return res.status(400).json({ message: markRead.error })
+        }
+        if (logoFile && logoFile.size > GALLERY_MARK_LOGO_MAX_BYTES) {
+            unlinkTemps()
+            return res.status(400).json({
+                message: "Gallery mark logo must be 1.2 MB or smaller.",
+            })
         }
 
         if (client !== undefined) {
             if (!mongoose.Types.ObjectId.isValid(client)) {
-                if (req.file) unlinkLocalTempFile(req.file.path)
+                unlinkTemps()
                 return res.status(400).json({ message: "Invalid client id" })
             }
             const clientDoc = await Client.findById(client)
             if (!clientDoc) {
-                if (req.file) unlinkLocalTempFile(req.file.path)
+                unlinkTemps()
                 return res.status(404).json({ message: "Client not found" })
             }
             folder.client = client
@@ -374,7 +416,7 @@ export const updateFolder = async (req, res) => {
 
         if (eventName !== undefined) {
             if (!eventName || !eventName.trim()) {
-                if (req.file) unlinkLocalTempFile(req.file.path)
+                unlinkTemps()
                 return res
                     .status(400)
                     .json({ message: "Event name cannot be empty" })
@@ -387,7 +429,7 @@ export const updateFolder = async (req, res) => {
 
         if (status !== undefined) {
             if (!FOLDER_STATUS_VALUES.includes(status)) {
-                if (req.file) unlinkLocalTempFile(req.file.path)
+                unlinkTemps()
                 return res.status(400).json({
                     message: `status must be one of: ${FOLDER_STATUS_VALUES.join(", ")}`,
                 })
@@ -395,17 +437,17 @@ export const updateFolder = async (req, res) => {
             folder.status = status
         }
 
-        if (req.file) {
+        if (coverFile) {
             const newCoverPath = path.posix.join(
                 "uploads",
                 "covers",
-                path.basename(req.file.path)
+                path.basename(coverFile.path)
             )
             if (isObjectStorageS3()) {
                 await uploadLocalFileThenRemove(
-                    req.file.path,
+                    coverFile.path,
                     newCoverPath,
-                    req.file.mimetype
+                    coverFile.mimetype
                 )
             }
             if (!folder.usingDefaultCover) {
@@ -436,7 +478,7 @@ export const updateFolder = async (req, res) => {
         if (rawFx !== undefined) {
             const p = parseCoverFocalPercent(rawFx)
             if (p === null) {
-                if (req.file) unlinkLocalTempFile(req.file.path)
+                unlinkTemps()
                 return res.status(400).json({
                     message: "coverFocalX must be a number from 0 to 100",
                 })
@@ -446,7 +488,7 @@ export const updateFolder = async (req, res) => {
         if (rawFy !== undefined) {
             const p = parseCoverFocalPercent(rawFy)
             if (p === null) {
-                if (req.file) unlinkLocalTempFile(req.file.path)
+                unlinkTemps()
                 return res.status(400).json({
                     message: "coverFocalY must be a number from 0 to 100",
                 })
@@ -459,7 +501,7 @@ export const updateFolder = async (req, res) => {
                 req.body.backgroundMusicEnabled
             )
             if (parsed === null) {
-                if (req.file) unlinkLocalTempFile(req.file.path)
+                unlinkTemps()
                 return res.status(400).json({
                     message:
                         "backgroundMusicEnabled must be true or false (or 1/0)",
@@ -468,7 +510,45 @@ export const updateFolder = async (req, res) => {
             folder.backgroundMusicEnabled = parsed
         }
 
+        const stampBefore = galleryMarkStampKey(folder)
+        const previousLogoPath = folder.galleryMark?.logoPath || ""
+        if (markRead.present || logoFile) {
+            const removeLogo = Boolean(markRead.removeLogo) && !logoFile
+            if (logoFile) {
+                newLogoStoredPath = path.posix.join(
+                    "uploads",
+                    "gallery-marks",
+                    path.basename(logoFile.path)
+                )
+                if (isObjectStorageS3()) {
+                    await uploadLocalFileThenRemove(
+                        logoFile.path,
+                        newLogoStoredPath,
+                        logoFile.mimetype || "application/octet-stream"
+                    )
+                }
+            }
+            assignGalleryMark(folder, markRead.patch || {}, {
+                logoPath: newLogoStoredPath,
+                logoName: logoFile?.originalname || "",
+                removeLogo,
+            })
+        }
+        const stampAfter = galleryMarkStampKey(folder)
+
         await folder.save()
+        logoCommitted = true
+        const nextLogoPath = folder.galleryMark?.logoPath || ""
+        if (previousLogoPath && previousLogoPath !== nextLogoPath) {
+            await deleteStoredAsset(previousLogoPath)
+        }
+        if (stampBefore !== stampAfter) {
+            try {
+                await restampFolderFinals(folder)
+            } catch (error) {
+                console.error("Gallery mark restamp error:", error)
+            }
+        }
         const populated = await folder.populate(
             "client",
             "name email contact location"
@@ -479,7 +559,10 @@ export const updateFolder = async (req, res) => {
             folder: serializeFolder(req, populated),
         })
     } catch (error) {
-        if (req.file) unlinkLocalTempFile(req.file.path)
+        unlinkTemps()
+        if (!logoCommitted && newLogoStoredPath) {
+            await deleteStoredAsset(newLogoStoredPath).catch(() => {})
+        }
         console.error("Update folder error:", error)
         return res.status(500).json({ message: "Server error" })
     }
@@ -1078,7 +1161,10 @@ export const getSharedFolder = async (req, res) => {
         const obj = folder.toObject()
         const imagesLocked = folderFinalImagesLocked(folder)
         const finals = media.finals.map((f) =>
-            serializePublicFinal(req, identifier, f, { imagesLocked })
+            serializePublicFinal(req, identifier, f, {
+                imagesLocked,
+                galleryMarkActive: isGalleryMarkActive(folder),
+            })
         )
         const finalById = new Map(finals.map((f) => [String(f._id), f]))
         const finalsBySet = (media.finalsBySet || []).map((bucket) => ({

@@ -41,7 +41,18 @@ import {
     pipeLockedFinalJpegToResponse,
     isRasterImageMime,
 } from "../utils/finalLockedPreview.js"
-import { finalizeRasterThumbnail } from "../utils/mediaThumbnail.js"
+import {
+    finalizeRasterThumbnail,
+    deleteMediaDerivatives,
+} from "../utils/mediaThumbnail.js"
+import {
+    applyGalleryMarkToFinal,
+    applyGalleryMarkToStoredFinal,
+    clearFinalMark,
+    deliveryFileForFinal,
+    isGalleryMarkActive,
+    openGalleryMarkLogo,
+} from "../utils/galleryMark.js"
 import {
     notifyAdminsOfFolderSelection,
     notifyAdminsOfFinalDownload,
@@ -73,6 +84,27 @@ const selectionRawPopulate = (rawSelect) => ({
 
 export const buildPublicUrl = buildPublicAssetUrl
 
+const MEDIA_DISPLAY_FIELDS = "width height blurHash variants"
+
+/** Fields the gallery needs to reserve space, show a blur, and pick a screen-sized WebP. */
+export const imageDisplayFields = (req, doc) => {
+    const sources = (Array.isArray(doc?.variants) ? doc.variants : [])
+        .filter((variant) => variant?.path && variant.width)
+        .map((variant) => ({
+            url: buildPublicUrl(req, variant.path),
+            width: variant.width,
+            mimeType: "image/webp",
+        }))
+        .sort((a, b) => a.width - b.width)
+
+    return {
+        width: Number(doc?.width) || 0,
+        height: Number(doc?.height) || 0,
+        blurHash: doc?.blurHash || "",
+        srcSet: sources,
+    }
+}
+
 export const serializeRawUpload = (req, doc, opts = {}) => {
     const { maskOriginalWithDisplay = false } = opts
     const originalUrl = buildPublicUrl(req, doc.filePath)
@@ -93,9 +125,24 @@ export const serializeRawUpload = (req, doc, opts = {}) => {
         createdAt: doc.createdAt,
         setId: doc.set ? String(doc.set) : null,
         sortOrder: doc.sortOrder ?? 0,
+        ...imageDisplayFields(req, doc),
     }
     if (!maskOriginalWithDisplay && displayUrl) out.displayUrl = displayUrl
     return out
+}
+
+function markedDeliveryFields(req, doc) {
+    if (!doc?.markedFilePath) {
+        return { markedUrl: "", markedThumbUrl: "", markedSrcSet: [] }
+    }
+    return {
+        markedUrl: buildPublicUrl(req, doc.markedFilePath),
+        markedThumbUrl: doc.markedThumbPath
+            ? buildPublicUrl(req, doc.markedThumbPath)
+            : "",
+        markedSrcSet: imageDisplayFields(req, { variants: doc.markedVariants })
+            .srcSet,
+    }
 }
 
 export const serializeSelection = (req, doc, opts = {}) => {
@@ -142,10 +189,12 @@ export const serializeFinal = (req, doc) => {
         originalFilename: doc.originalFilename,
         mimeType: doc.mimeType,
         size: doc.size,
+        ...imageDisplayFields(req, doc),
         selectionMediaId: doc.selectionMediaId?._id || doc.selectionMediaId || null,
         setId: doc.set ? String(doc.set) : selSetId,
         sortOrder: doc.sortOrder ?? 0,
         createdAt: doc.createdAt,
+        ...markedDeliveryFields(req, doc),
     }
 }
 
@@ -153,18 +202,28 @@ export const serializeFinal = (req, doc) => {
 export const serializePublicFinal = (req, identifier, f, opts = {}) => {
     const ident = encodeURIComponent(String(identifier))
     const host = `${req.protocol}://${req.get("host")}`
+    const { markedUrl, markedThumbUrl, markedSrcSet, ...rest } = f
     if (opts.imagesLocked) {
         return {
-            ...f,
+            ...rest,
             url: `${host}/api/share/${ident}/finals/${f._id}/locked-preview`,
             thumbUrl: "",
+            srcSet: [],
             locked: true,
             rightsNote:
                 "Payment lock: downloads are disabled and only watermarked previews are available. True screenshot prevention is not possible over HTTP; the gallery app should add UX mitigations (e.g. overlays, blur, user education).",
         }
     }
+    const stamped = Boolean(opts.galleryMarkActive && markedUrl)
     return {
-        ...f,
+        ...rest,
+        url: stamped ? markedUrl : rest.url,
+        thumbUrl: stamped ? markedThumbUrl || markedUrl : rest.thumbUrl,
+        srcSet: stamped
+            ? markedSrcSet?.length
+                ? markedSrcSet
+                : []
+            : rest.srcSet,
         downloadUrl: `${host}/api/share/${ident}/finals/${f._id}/download`,
     }
 }
@@ -195,10 +254,10 @@ export const getFolderMediaCollections = async (
     { clientGallery = false, galleryConfig } = {}
 ) => {
     const rawSelect =
-        "_id set filePath displayFilePath thumbPath originalFilename mimeType size sortOrder createdAt"
+        `_id set filePath displayFilePath thumbPath ${MEDIA_DISPLAY_FIELDS} originalFilename mimeType size sortOrder createdAt`
     const selectionSelect = "_id set editStatus rawMediaId createdAt updatedAt"
     const finalSelect =
-        "_id set filePath thumbPath originalFilename mimeType size selectionMediaId sortOrder createdAt"
+        `_id set filePath thumbPath ${MEDIA_DISPLAY_FIELDS} markedFilePath markedThumbPath markedVariants originalFilename mimeType size selectionMediaId sortOrder createdAt`
 
     const setSelect = "_id name sortOrder createdAt updatedAt"
 
@@ -258,15 +317,12 @@ const rollbackCreatedMedia = async (created) => {
         if (isObjectStorageS3()) {
             await deleteStoredAsset(doc.filePath)
             if (doc.displayFilePath) await deleteStoredAsset(doc.displayFilePath)
-            if (doc.thumbPath) await deleteStoredAsset(doc.thumbPath)
         } else {
             unlinkLocalTempFile(diskPath)
             unlinkLocalTempFile(displayDiskPath)
-            if (doc.thumbPath) {
-                const t = resolveLocalAbsolutePath(doc.thumbPath)
-                unlinkLocalTempFile(t)
-            }
         }
+        await deleteMediaDerivatives(doc)
+        await clearFinalMark(doc)
         await FolderMedia.deleteOne({ _id: doc._id }).catch(() => {})
     }
 }
@@ -275,11 +331,6 @@ const rollbackCreatedMedia = async (created) => {
 async function replaceExistingRawMedia(req, existingDoc, f, folderId, watermarkOn) {
     const oldMain = existingDoc.filePath
     const oldDisp = existingDoc.displayFilePath || ""
-
-    if (existingDoc.thumbPath) {
-        await deleteStoredAsset(existingDoc.thumbPath)
-        existingDoc.thumbPath = ""
-    }
 
     const newMainPath = path.posix.join(
         "uploads",
@@ -351,7 +402,8 @@ async function replaceExistingFinalMedia(
     f,
     folderId,
     selectionMediaIdUpdate,
-    setIdUpdate
+    setIdUpdate,
+    folder
 ) {
     const oldPath = existingDoc.filePath
     const newPath = path.posix.join(
@@ -361,11 +413,6 @@ async function replaceExistingFinalMedia(
         "finals",
         path.basename(f.path)
     )
-
-    if (existingDoc.thumbPath) {
-        await deleteStoredAsset(existingDoc.thumbPath)
-        existingDoc.thumbPath = ""
-    }
 
     existingDoc.filePath = newPath
     existingDoc.originalFilename = f.originalname
@@ -379,6 +426,9 @@ async function replaceExistingFinalMedia(
     }
 
     await finalizeRasterThumbnail(existingDoc, f, false, undefined)
+    if (folder) {
+        await applyGalleryMarkToFinal(existingDoc, f.path, folder)
+    }
 
     if (isObjectStorageS3()) {
         await uploadLocalFileThenRemove(f.path, newPath, f.mimetype)
@@ -801,7 +851,8 @@ export const uploadFinalMedia = async (req, res) => {
                     f,
                     id,
                     selUpdate,
-                    uploadSetId
+                    uploadSetId,
+                    folder
                 )
                 replacedDocs.push(doc)
                 mediaOut.push(serializeFinal(req, doc))
@@ -827,6 +878,7 @@ export const uploadFinalMedia = async (req, res) => {
             })
             created.push({ doc, diskPath: f.path })
             await finalizeRasterThumbnail(doc, f, false, undefined)
+            await applyGalleryMarkToFinal(doc, f.path, folder)
             await doc.save()
             if (isObjectStorageS3()) {
                 await uploadLocalFileThenRemove(f.path, filePath, doc.mimeType)
@@ -1031,7 +1083,7 @@ export const patchSelectionEditStatus = async (req, res) => {
             kind: "selection",
             ...ACTIVE_MEDIA_MATCH,
         }).populate(selectionRawPopulate(
-            "_id set filePath displayFilePath thumbPath originalFilename mimeType size createdAt"
+            `_id set filePath displayFilePath thumbPath ${MEDIA_DISPLAY_FIELDS} originalFilename mimeType size createdAt`
         ))
 
         if (!doc) {
@@ -1042,7 +1094,7 @@ export const patchSelectionEditStatus = async (req, res) => {
         await doc.save()
         await doc.populate(
             selectionRawPopulate(
-                "_id set filePath displayFilePath thumbPath originalFilename mimeType size createdAt"
+                `_id set filePath displayFilePath thumbPath ${MEDIA_DISPLAY_FIELDS} originalFilename mimeType size createdAt`
             )
         )
 
@@ -1520,9 +1572,35 @@ export const streamSharedFinalLockedPreview = async (req, res) => {
             return res.status(404).json({ message: "File not found" })
         }
 
-        const ok = await pipeLockedFinalJpegToResponse(res, got.buffer)
-        if (!ok && !res.headersSent) {
-            return res.status(422).json({ message: "Could not generate preview" })
+        let logo = null
+        let mark = null
+        if (isGalleryMarkActive(folder)) {
+            try {
+                logo = await openGalleryMarkLogo(folder)
+                if (logo?.path) {
+                    mark = {
+                        logoPath: logo.path,
+                        position: folder.galleryMark.position,
+                        size: folder.galleryMark.size,
+                        opacity: folder.galleryMark.opacity,
+                        inset: folder.galleryMark.inset,
+                        plate: folder.galleryMark.plate,
+                    }
+                }
+            } catch (error) {
+                console.warn("Gallery mark logo unavailable:", error?.message)
+            }
+        }
+
+        try {
+            const ok = await pipeLockedFinalJpegToResponse(res, got.buffer, mark)
+            if (!ok && !res.headersSent) {
+                return res.status(422).json({ message: "Could not generate preview" })
+            }
+        } finally {
+            if (logo?.cleanup) {
+                await fs.promises.unlink(logo.path).catch(() => {})
+            }
         }
     } catch (error) {
         console.error("Locked final preview error:", error)
@@ -1565,20 +1643,32 @@ export const downloadSharedFinal = async (req, res) => {
             return res.status(404).json({ message: "File not found" })
         }
 
-        const downloadName =
-            finalDoc.originalFilename ||
-            path.basename(finalDoc.filePath) ||
-            "download"
+        let delivery = deliveryFileForFinal(folder, finalDoc)
+        if (
+            delivery.storedPath !== finalDoc.filePath &&
+            !isObjectStorageS3() &&
+            !fs.existsSync(resolveLocalAbsolutePath(delivery.storedPath))
+        ) {
+            delivery = {
+                storedPath: finalDoc.filePath,
+                contentType: finalDoc.mimeType || "application/octet-stream",
+                downloadName:
+                    finalDoc.originalFilename ||
+                    path.basename(finalDoc.filePath) ||
+                    "download",
+            }
+        }
+        const downloadName = delivery.downloadName
 
         if (isObjectStorageS3()) {
             try {
-                const out = await getObjectStreamForStoredPath(finalDoc.filePath)
+                const out = await getObjectStreamForStoredPath(delivery.storedPath)
                 if (!out?.Body) {
                     return res.status(404).json({ message: "File missing in storage" })
                 }
                 res.setHeader(
                     "Content-Type",
-                    finalDoc.mimeType || "application/octet-stream"
+                    delivery.contentType || "application/octet-stream"
                 )
                 res.setHeader(
                     "Content-Disposition",
@@ -1600,7 +1690,7 @@ export const downloadSharedFinal = async (req, res) => {
             }
         }
 
-        const absPath = resolveLocalAbsolutePath(finalDoc.filePath)
+        const absPath = resolveLocalAbsolutePath(delivery.storedPath)
         if (!fs.existsSync(absPath)) {
             return res.status(404).json({ message: "File missing on server" })
         }
@@ -1629,10 +1719,11 @@ export async function hardRemoveMediaDocument(doc) {
     if (doc.kind === "raw") {
         await deleteStoredAsset(doc.filePath)
         await deleteStoredAsset(doc.displayFilePath)
-        await deleteStoredAsset(doc.thumbPath)
+        await deleteMediaDerivatives(doc)
     } else if (doc.kind === "final") {
         await deleteStoredAsset(doc.filePath)
-        await deleteStoredAsset(doc.thumbPath)
+        await deleteMediaDerivatives(doc)
+        await clearFinalMark(doc)
     }
     await FolderMedia.deleteOne({ _id: doc._id }).catch(() => {})
 }
@@ -1644,7 +1735,8 @@ export async function purgeFolderMediaAssetsAndDocuments(folderId) {
         if (doc.kind === "raw" || doc.kind === "final") {
             await deleteStoredAsset(doc.filePath)
             if (doc.kind === "raw") await deleteStoredAsset(doc.displayFilePath)
-            await deleteStoredAsset(doc.thumbPath)
+            await deleteMediaDerivatives(doc)
+            if (doc.kind === "final") await clearFinalMark(doc)
         }
     }
     await FolderMedia.deleteMany({ folder: folderId })
@@ -1664,6 +1756,9 @@ export async function purgeFolderWhole(folderRef) {
     }
     if (folder.backgroundMusic) {
         await deleteStoredAsset(folder.backgroundMusic)
+    }
+    if (folder.galleryMark?.logoPath) {
+        await deleteStoredAsset(folder.galleryMark.logoPath)
     }
     await Folder.deleteOne({ _id: id })
 }
@@ -1886,6 +1981,13 @@ export const restoreFolderMedia = async (req, res) => {
 
         doc.deletedAt = null
         doc.deletedBy = null
+        if (doc.kind === "final") {
+            try {
+                await applyGalleryMarkToStoredFinal(doc, folder)
+            } catch (error) {
+                console.warn("Gallery mark on restore skipped:", error?.message)
+            }
+        }
         await doc.save()
 
         return res.status(200).json({

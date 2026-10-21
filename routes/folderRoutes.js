@@ -47,6 +47,7 @@ import {
     uploadFolderRaw,
     uploadFolderFinal,
     uploadBackgroundMusic,
+    folderUpdateUpload,
 } from "../middleware/upload.js"
 
 const router = express.Router()
@@ -97,7 +98,8 @@ router.put(
 router.delete("/:id/background-music", deleteFolderBackgroundMusic)
 
 router.get("/:id", getFolder)
-router.put("/:id", uploadCover.single("coverImage"), updateFolder)
+router.put("/:id", folderUpdateUpload, updateFolder)
+router.patch("/:id", folderUpdateUpload, updateFolder)
 router.delete("/:id", deleteFolder)
 
 export default router

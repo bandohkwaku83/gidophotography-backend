@@ -86,7 +86,7 @@ export async function generateRawDisplayAsset({
                 .composite([
                     { input: videoPlaceholderOverlaySvg(w, h), blend: "over" },
                 ])
-                .jpeg({ quality: 86, mozjpeg: true })
+                .jpeg({ quality: 86, mozjpeg: true, progressive: true })
                 .toFile(outputAbsolutePath)
             return { ok: true, relativePath, absolutePath: outputAbsolutePath }
         }
@@ -114,7 +114,7 @@ export async function generateRawDisplayAsset({
         const overlay = tripleStampOverlaySvg(info.width, info.height)
         await sharp(data)
             .composite([{ input: overlay, blend: "over" }])
-            .jpeg({ quality: 86, mozjpeg: true })
+            .jpeg({ quality: 86, mozjpeg: true, progressive: true })
             .toFile(outputAbsolutePath)
 
         return { ok: true, relativePath, absolutePath: outputAbsolutePath }

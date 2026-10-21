@@ -25,7 +25,9 @@ export async function runTrashPurgeJob() {
     const cutoff = purgeCutoffDate()
 
     const expiredFolders = await Folder.find({ deletedAt: { $lte: cutoff } })
-        .select("_id usingDefaultCover coverImage backgroundMusic deletedAt")
+        .select(
+            "_id usingDefaultCover coverImage backgroundMusic galleryMark.logoPath deletedAt"
+        )
         .limit(BATCH)
         .lean()
 

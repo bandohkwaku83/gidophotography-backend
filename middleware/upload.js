@@ -62,6 +62,84 @@ export const uploadCover = multer({
     limits: { fileSize: MAX_COVER_AND_SETTINGS_MB * 1024 * 1024 },
 })
 
+const GALLERY_MARK_LOGO_FIELDS = [
+    "galleryMarkLogo",
+    "logo",
+    "markLogo",
+    "galleryMarkFile",
+]
+
+const GALLERY_MARK_LOGO_EXT = new Set([
+    ".png",
+    ".svg",
+    ".webp",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+])
+
+const uniqueUploadName = (file) => {
+    const ext = path.extname(file.originalname)
+    const base = path
+        .basename(file.originalname, ext)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .slice(0, 40)
+    const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`
+    return `${base || "file"}-${unique}${ext}`
+}
+
+const folderUpdateStorage = multer.diskStorage({
+    destination: (req, file, cb) => {
+        const sub = file.fieldname === "coverImage" ? "covers" : "gallery-marks"
+        const dir = path.join("uploads", sub)
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+        cb(null, dir)
+    },
+    filename: (req, file, cb) => cb(null, uniqueUploadName(file)),
+})
+
+const galleryMarkLogoFilter = (req, file, cb) => {
+    const ext = path.extname(file.originalname || "").toLowerCase()
+    const mime = String(file.mimetype || "").toLowerCase()
+    const mimeOk =
+        mime.startsWith("image/") ||
+        mime === "text/xml" ||
+        mime === "application/xml" ||
+        mime === "application/octet-stream" ||
+        mime === ""
+    if (GALLERY_MARK_LOGO_EXT.has(ext) && mimeOk) return cb(null, true)
+    cb(
+        new Error(
+            "Gallery mark logo must be a PNG, SVG, WebP, JPEG, or GIF."
+        )
+    )
+}
+
+const folderUpdateFileFilter = (req, file, cb) => {
+    if (file.fieldname === "coverImage") return imageFileFilter(req, file, cb)
+    if (GALLERY_MARK_LOGO_FIELDS.includes(file.fieldname)) {
+        return galleryMarkLogoFilter(req, file, cb)
+    }
+    cb(new Error("Unexpected file field"))
+}
+
+const uploadFolderUpdateMulter = multer({
+    storage: folderUpdateStorage,
+    fileFilter: folderUpdateFileFilter,
+    limits: { fileSize: MAX_COVER_AND_SETTINGS_MB * 1024 * 1024 },
+}).fields([
+    { name: "coverImage", maxCount: 1 },
+    ...GALLERY_MARK_LOGO_FIELDS.map((name) => ({ name, maxCount: 1 })),
+])
+
+/** Multipart folder update: cover and/or gallery-mark logo. JSON requests pass through. */
+export function folderUpdateUpload(req, res, next) {
+    const ct = String(req.headers["content-type"] || "")
+    if (!ct.includes("multipart/form-data")) return next()
+    uploadFolderUpdateMulter(req, res, next)
+}
+
 export const uploadSettingsImage = multer({
     storage: buildStorage("settings"),
     fileFilter: imageFileFilter,
