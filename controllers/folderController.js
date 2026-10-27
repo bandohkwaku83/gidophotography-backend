@@ -28,7 +28,7 @@ import {
     isGalleryMarkActive,
     publicGalleryMark,
     readGalleryMarkPatch,
-    restampFolderFinals,
+    scheduleRestampFolderFinals,
 } from "../utils/galleryMark.js"
 import {
     isObjectStorageS3,
@@ -50,6 +50,7 @@ import {
     galleryCollectionFieldsFromFolder,
     parseGalleryCollectionLabel,
 } from "../utils/galleryCollections.js"
+import { loadShareSetAccess } from "../utils/collectionLock.js"
 
 const SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/
 
@@ -312,7 +313,7 @@ export const getFolders = async (req, res) => {
 
         const folders = await Folder.find(filter)
             .populate("client", "name email contact location")
-            .sort({ eventDate: -1, createdAt: -1 })
+            .sort({ sortOrder: 1, eventDate: -1, createdAt: -1 })
 
         return res.status(200).json({
             count: folders.length,
@@ -320,6 +321,58 @@ export const getFolders = async (req, res) => {
         })
     } catch (error) {
         console.error("Get folders error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+/** Persist the galleries-page order. `PATCH /api/folders/reorder` */
+export const reorderFolders = async (req, res) => {
+    try {
+        const orderedIds = req.body?.orderedIds
+        if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+            return res.status(400).json({
+                message: "orderedIds must be a non-empty array",
+            })
+        }
+
+        const ids = orderedIds.map((id) => String(id).trim())
+        if (ids.some((id) => !id)) {
+            return res.status(400).json({ message: "orderedIds must not contain empty ids" })
+        }
+        if (new Set(ids).size !== ids.length) {
+            return res.status(400).json({ message: "orderedIds must not contain duplicates" })
+        }
+        for (const id of ids) {
+            if (!mongoose.Types.ObjectId.isValid(id)) {
+                return res.status(400).json({ message: `Invalid folder id: ${id}` })
+            }
+        }
+
+        const found = await Folder.find({
+            _id: { $in: ids },
+            deletedAt: null,
+        }).select("_id")
+        if (found.length !== ids.length) {
+            return res.status(400).json({
+                message: "One or more galleries were not found",
+            })
+        }
+
+        await Folder.bulkWrite(
+            ids.map((id, index) => ({
+                updateOne: {
+                    filter: { _id: id, deletedAt: null },
+                    update: { $set: { sortOrder: index } },
+                },
+            }))
+        )
+
+        return res.status(200).json({
+            message: "Gallery order saved",
+            updatedCount: ids.length,
+        })
+    } catch (error) {
+        console.error("Reorder folders error:", error)
         return res.status(500).json({ message: "Server error" })
     }
 }
@@ -543,11 +596,7 @@ export const updateFolder = async (req, res) => {
             await deleteStoredAsset(previousLogoPath)
         }
         if (stampBefore !== stampAfter) {
-            try {
-                await restampFolderFinals(folder)
-            } catch (error) {
-                console.error("Gallery mark restamp error:", error)
-            }
+            scheduleRestampFolderFinals(folder)
         }
         const populated = await folder.populate(
             "client",
@@ -1152,12 +1201,20 @@ export const getSharedFolder = async (req, res) => {
 
         const settings = await Settings.getSingleton()
         const galleryConfig = galleryCollectionFieldsFromFolder(folder)
+        const access = await loadShareSetAccess(req, folder, identifier)
         const media = await getFolderMediaCollections(req, folder._id, {
             clientGallery: Boolean(settings.watermarkPreviewImages),
             galleryConfig,
+            omitSetIds: access.hiddenSetIds,
         })
         const { listFolderSetsForFolder } = await import("./folderSetController.js")
-        const setsPayload = await listFolderSetsForFolder(folder._id)
+        const setsPayload = await listFolderSetsForFolder(folder._id, {
+            audience: "public",
+            unlockedSetIds: access.unlockedSetIds,
+        })
+        const publicSets = (setsPayload.sets || []).map(
+            ({ accessCode, accessCodeVersion, ...set }) => set
+        )
         const obj = folder.toObject()
         const imagesLocked = folderFinalImagesLocked(folder)
         const finals = media.finals.map((f) =>
@@ -1181,6 +1238,8 @@ export const getSharedFolder = async (req, res) => {
                 ? buildPublicAssetUrl(req, obj.backgroundMusic)
                 : ""
 
+        res.set("Cache-Control", "private, no-store")
+        res.set("Vary", "Cookie")
         return res.status(200).json({
             folder: {
                 _id: obj._id,
@@ -1227,6 +1286,7 @@ export const getSharedFolder = async (req, res) => {
                 },
                 ...galleryCollections,
                 ...setsPayload,
+                sets: publicSets,
                 uploads: media.uploads,
                 selection: media.selection,
                 finals,

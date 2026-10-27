@@ -2,6 +2,7 @@ import express from "express"
 import {
     createFolder,
     getFolders,
+    reorderFolders,
     getFolder,
     updateFolder,
     deleteFolder,
@@ -56,6 +57,7 @@ router.use(protect)
 
 router.post("/", uploadCover.single("coverImage"), createFolder)
 router.get("/", getFolders)
+router.patch("/reorder", reorderFolders)
 router.get("/share-link-expiry-presets", listShareLinkExpiryPresets)
 router.get("/trash", listDeletedFolders)
 router.post("/trash/purge", purgeTrash)

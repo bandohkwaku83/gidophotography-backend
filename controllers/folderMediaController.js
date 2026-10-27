@@ -73,6 +73,7 @@ import {
     buildOrderedSetBuckets,
     galleryCollectionFieldsFromFolder,
 } from "../utils/galleryCollections.js"
+import { loadShareSetAccess } from "../utils/collectionLock.js"
 
 const FOLDER_COLL = Folder.collection.name
 
@@ -231,7 +232,7 @@ export const serializePublicFinal = (req, identifier, f, opts = {}) => {
 export const folderFinalImagesLocked = (folder) =>
     Boolean(folder?.finalDelivery?.imagesLocked)
 
-const loadActiveSharedFolder = async (identifier) => {
+export const loadActiveSharedFolder = async (identifier) => {
     const folder = await Folder.findOne({
         "share.enabled": true,
         deletedAt: null,
@@ -248,10 +249,39 @@ const loadActiveSharedFolder = async (identifier) => {
     return { folder }
 }
 
+function itemReferencesHiddenSet(item, omitSetIds) {
+    if (!omitSetIds?.size) return false
+    if (item?.setId != null && item.setId !== "" && omitSetIds.has(String(item.setId))) {
+        return true
+    }
+    const rawSetId = item?.raw?.setId
+    if (rawSetId != null && rawSetId !== "" && omitSetIds.has(String(rawSetId))) {
+        return true
+    }
+    return false
+}
+
+function withoutHiddenSetItems(items, omitSetIds) {
+    if (!omitSetIds?.size) return items
+    return items.filter((item) => !itemReferencesHiddenSet(item, omitSetIds))
+}
+
+async function finalHiddenFromShare(finalDoc, hiddenSetIds) {
+    if (!hiddenSetIds?.size || !finalDoc) return false
+    if (finalDoc.set && hiddenSetIds.has(String(finalDoc.set))) return true
+    if (finalDoc.set) return false
+    const selId = finalDoc.selectionMediaId?._id || finalDoc.selectionMediaId
+    if (!selId) return false
+    const sel = await FolderMedia.findOne({ _id: selId, deletedAt: null })
+        .select("set")
+        .lean()
+    return Boolean(sel?.set && hiddenSetIds.has(String(sel.set)))
+}
+
 export const getFolderMediaCollections = async (
     req,
     folderId,
-    { clientGallery = false, galleryConfig } = {}
+    { clientGallery = false, galleryConfig, omitSetIds = null } = {}
 ) => {
     const rawSelect =
         `_id set filePath displayFilePath thumbPath ${MEDIA_DISPLAY_FIELDS} originalFilename mimeType size sortOrder createdAt`
@@ -291,12 +321,20 @@ export const getFolderMediaCollections = async (
 
     const collectionConfig = galleryConfig ?? {}
 
-    const uploads = rawDocs.map((d) => serializeRawUpload(req, d, rawOpts))
-    const selection = selectionDocs.map((d) => serializeSelection(req, d, selOpts))
-    const finals = finalDocs.map((d) => serializeFinal(req, d))
+    const uploads = withoutHiddenSetItems(
+        rawDocs.map((d) => serializeRawUpload(req, d, rawOpts)),
+        omitSetIds
+    )
+    const selection = withoutHiddenSetItems(
+        selectionDocs.map((d) => serializeSelection(req, d, selOpts)),
+        omitSetIds
+    )
+    const finals = withoutHiddenSetItems(
+        finalDocs.map((d) => serializeFinal(req, d)),
+        omitSetIds
+    )
 
-    const buildBucket = (items, { sortItems = false } = {}) =>
-        buildOrderedSetBuckets(items, setDocs, collectionConfig)
+    const buildBucket = (items) => buildOrderedSetBuckets(items, setDocs, collectionConfig)
 
     const uploadsBySet = buildBucket(uploads)
     const finalsBySet = buildBucket(finals)
@@ -1246,6 +1284,11 @@ export const addClientSelection = async (req, res) => {
             return res.status(404).json({ message: "Photo not found in gallery" })
         }
 
+        const { hiddenSetIds } = await loadShareSetAccess(req, folder, identifier)
+        if (raw.set && hiddenSetIds.has(String(raw.set))) {
+            return res.status(404).json({ message: "Photo not found in gallery" })
+        }
+
         const existing = await FolderMedia.findOne({
             folder: folder._id,
             kind: "selection",
@@ -1394,11 +1437,15 @@ export const syncClientSelections = async (req, res) => {
             })
         }
 
-        const existingSelections = await FolderMedia.find({
-            folder: folder._id,
-            kind: "selection",
-            ...ACTIVE_MEDIA_MATCH,
-        })
+        const [existingSelections, access] = await Promise.all([
+            FolderMedia.find({
+                folder: folder._id,
+                kind: "selection",
+                ...ACTIVE_MEDIA_MATCH,
+            }),
+            loadShareSetAccess(req, folder, identifier),
+        ])
+        const hiddenSetIds = access.hiddenSetIds
         const priorRawIds = new Set(
             existingSelections.map((s) => String(s.rawMediaId))
         )
@@ -1423,6 +1470,28 @@ export const syncClientSelections = async (req, res) => {
                         "One or more photos are no longer available in the gallery",
                 })
             }
+            const rawSetId = raw?.set ? String(raw.set) : null
+            if (rawSetId && hiddenSetIds.has(rawSetId) && !priorRawIds.has(String(rid))) {
+                return res.status(400).json({
+                    message: "One or more photos are not available in the gallery",
+                })
+            }
+        }
+
+        const priorSetRaws = priorRawIds.size
+            ? await FolderMedia.find({
+                  _id: { $in: [...priorRawIds] },
+                  folder: folder._id,
+                  kind: "raw",
+              })
+                  .select("_id set")
+                  .lean()
+            : []
+        const setByRawId = new Map(
+            priorSetRaws.map((raw) => [String(raw._id), raw.set ? String(raw.set) : null])
+        )
+        for (const raw of raws) {
+            setByRawId.set(String(raw._id), raw.set ? String(raw.set) : null)
         }
 
         const want = new Set(uniqueIds.map(String))
@@ -1430,10 +1499,17 @@ export const syncClientSelections = async (req, res) => {
 
         let removed = 0
         for (const sel of existingSelections) {
-            if (!want.has(String(sel.rawMediaId))) {
-                await FolderMedia.deleteOne({ _id: sel._id })
-                removed += 1
+            if (want.has(String(sel.rawMediaId))) continue
+            const selSetId = sel.set ? String(sel.set) : null
+            const rawSetId = setByRawId.get(String(sel.rawMediaId)) || null
+            if (
+                (selSetId && hiddenSetIds.has(selSetId)) ||
+                (rawSetId && hiddenSetIds.has(rawSetId))
+            ) {
+                continue
             }
+            await FolderMedia.deleteOne({ _id: sel._id })
+            removed += 1
         }
 
         const have = new Set(
@@ -1467,6 +1543,7 @@ export const syncClientSelections = async (req, res) => {
         const media = await getFolderMediaCollections(req, folder._id, {
             clientGallery: Boolean(settings.watermarkPreviewImages),
             galleryConfig: galleryCollectionFieldsFromFolder(folder),
+            omitSetIds: hiddenSetIds,
         })
 
         return res.status(200).json({
@@ -1555,6 +1632,11 @@ export const streamSharedFinalLockedPreview = async (req, res) => {
             return res.status(404).json({ message: "File not found" })
         }
 
+        const previewAccess = await loadShareSetAccess(req, folder, identifier)
+        if (await finalHiddenFromShare(finalDoc, previewAccess.hiddenSetIds)) {
+            return res.status(404).json({ message: "File not found" })
+        }
+
         if (!isRasterImageMime(finalDoc.mimeType)) {
             return res.status(415).json({
                 message:
@@ -1640,6 +1722,11 @@ export const downloadSharedFinal = async (req, res) => {
             ...ACTIVE_MEDIA_MATCH,
         })
         if (!finalDoc?.filePath) {
+            return res.status(404).json({ message: "File not found" })
+        }
+
+        const downloadAccess = await loadShareSetAccess(req, folder, identifier)
+        if (await finalHiddenFromShare(finalDoc, downloadAccess.hiddenSetIds)) {
             return res.status(404).json({ message: "File not found" })
         }
 

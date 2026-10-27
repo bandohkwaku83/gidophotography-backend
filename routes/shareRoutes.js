@@ -1,5 +1,6 @@
 import express from "express"
 import { getSharedFolder } from "../controllers/folderController.js"
+import { unlockSharedFolderSet } from "../controllers/folderSetController.js"
 import {
     addClientSelection,
     removeClientSelection,
@@ -23,6 +24,7 @@ router.post("/:identifier/selections/submit", submitClientSelections)
 router.post("/:identifier/selections/sync", syncClientSelections)
 router.delete("/:identifier/selections/:selectionId", removeClientSelection)
 router.post("/:identifier/selections", addClientSelection)
+router.post("/:identifier/sets/:setId/unlock", unlockSharedFolderSet)
 router.get("/:identifier", getSharedFolder)
 
 export default router

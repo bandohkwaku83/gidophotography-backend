@@ -140,6 +140,13 @@ const folderSchema = new mongoose.Schema(
             type: Number,
             default: -1,
         },
+        /**
+         * Manual position on the galleries page. Lower comes first.
+         * Left unset on create so new galleries sort ahead of arranged ones.
+         */
+        sortOrder: {
+            type: Number,
+        },
         /** Set when gallery is deleted; restore within SOFT_DELETE_RETENTION_DAYS before purge cron removes permanently. */
         deletedAt: { type: Date, default: null, index: true },
     },

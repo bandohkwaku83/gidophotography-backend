@@ -4,7 +4,23 @@ import FolderSet from "../models/FolderSet.js"
 import FolderMedia from "../models/FolderMedia.js"
 import { appendMediaToSetBucketEnd } from "../utils/mediaSortOrder.js"
 import { galleryCollectionFieldsFromFolder } from "../utils/galleryCollections.js"
-import { getFolderMediaCollections } from "./folderMediaController.js"
+import { getFolderMediaCollections, loadActiveSharedFolder } from "./folderMediaController.js"
+import {
+    accessCodesMatch,
+    clearUnlockFailures,
+    generateAccessCode,
+    mergeUnlockedSets,
+    normalizeAccessCodeVersion,
+    readRequestCookie,
+    recordUnlockFailure,
+    SET_ACCESS_COOKIE,
+    decodeSetAccessToken,
+    setAccessCookieOptions,
+    setAccessTtlSeconds,
+    signSetAccessToken,
+    unlockAttemptLimited,
+    unlockFailureKey,
+} from "../utils/collectionLock.js"
 
 const ACTIVE_MEDIA_MATCH = { deletedAt: null }
 
@@ -19,7 +35,44 @@ async function assertFolder(folderId) {
     return { folder }
 }
 
-async function buildSetsPayload(folderId) {
+function optionalBoolean(body, key) {
+    if (body == null || !Object.prototype.hasOwnProperty.call(body, key)) {
+        return { ok: true, present: false }
+    }
+    if (typeof body[key] !== "boolean") {
+        return { ok: false, message: `${key} must be a boolean` }
+    }
+    return { ok: true, present: true, value: body[key] }
+}
+
+function ensureAccessCode(set) {
+    if (!set.accessCode) {
+        set.accessCode = generateAccessCode()
+        set.accessCodeVersion = 1
+        return
+    }
+    set.accessCodeVersion = normalizeAccessCodeVersion(set.accessCodeVersion)
+}
+
+/** Keep an existing code, or create one the first time the set is locked. */
+function lockSet(set) {
+    ensureAccessCode(set)
+    set.locked = true
+}
+
+function unlockSet(set) {
+    set.locked = false
+}
+
+/** New code, lock the set, and invalidate unlock cookies for the previous code. */
+function regenerateSetAccessCode(set) {
+    const current = normalizeAccessCodeVersion(set.accessCodeVersion)
+    set.accessCode = generateAccessCode()
+    set.accessCodeVersion = current + 1
+    set.locked = true
+}
+
+async function buildSetsPayload(folderId, { audience = "studio", unlockedSetIds = null } = {}) {
     const sets = await FolderSet.find({
         folder: folderId,
         deletedAt: null,
@@ -66,25 +119,50 @@ async function buildSetsPayload(folderId) {
         }
     }
 
-    const serialized = sets.map((s) => ({
-        _id: s._id,
-        name: s.name,
-        sortOrder: s.sortOrder ?? 0,
-        rawCount: rawCountBySet.get(String(s._id)) ?? 0,
-        selectionCount: selectionCountBySet.get(String(s._id)) ?? 0,
-        finalCount: finalCountBySet.get(String(s._id)) ?? 0,
-        mediaCount:
-            (rawCountBySet.get(String(s._id)) ?? 0) +
-            (selectionCountBySet.get(String(s._id)) ?? 0) +
-            (finalCountBySet.get(String(s._id)) ?? 0),
-        createdAt: s.createdAt,
-        updatedAt: s.updatedAt,
-    }))
+    const unlocked =
+        unlockedSetIds instanceof Set
+            ? unlockedSetIds
+            : new Set(unlockedSetIds || [])
 
-    const totalRaw = generalRawCount + serialized.reduce((n, x) => n + x.rawCount, 0)
-    const totalSelection =
+    const serialized = sets.map((s) => {
+        const rawCount = rawCountBySet.get(String(s._id)) ?? 0
+        const selectionCount = selectionCountBySet.get(String(s._id)) ?? 0
+        const finalCount = finalCountBySet.get(String(s._id)) ?? 0
+        const locked = Boolean(s.locked)
+        const row = {
+            _id: s._id,
+            name: s.name,
+            sortOrder: s.sortOrder ?? 0,
+            locked,
+            rawCount,
+            selectionCount,
+            finalCount,
+            mediaCount: rawCount + selectionCount + finalCount,
+            createdAt: s.createdAt,
+            updatedAt: s.updatedAt,
+        }
+        if (audience === "public") {
+            row.unlocked = !locked || unlocked.has(String(s._id))
+        } else {
+            row.accessCode = s.accessCode || null
+        }
+        return row
+    })
+
+    let totalRaw = generalRawCount + serialized.reduce((n, x) => n + x.rawCount, 0)
+    let totalSelection =
         generalSelectionCount + serialized.reduce((n, x) => n + x.selectionCount, 0)
-    const totalFinal = generalFinalCount + serialized.reduce((n, x) => n + x.finalCount, 0)
+    let totalFinal = generalFinalCount + serialized.reduce((n, x) => n + x.finalCount, 0)
+
+    if (audience === "public") {
+        for (const row of serialized) {
+            if (row.locked && !row.unlocked) {
+                totalRaw -= row.rawCount
+                totalSelection -= row.selectionCount
+                totalFinal -= row.finalCount
+            }
+        }
+    }
 
     return {
         sets: serialized,
@@ -100,8 +178,12 @@ async function buildSetsPayload(folderId) {
     }
 }
 
-export async function listFolderSetsForFolder(folderId) {
-    return buildSetsPayload(folderId)
+export async function listFolderSetsForFolder(folderId, options) {
+    return buildSetsPayload(folderId, options)
+}
+
+function setRowFromPayload(payload, setId) {
+    return payload.sets.find((s) => String(s._id) === String(setId)) ?? null
 }
 
 export const listFolderSets = async (req, res) => {
@@ -135,6 +217,11 @@ export const createFolderSet = async (req, res) => {
             return res.status(400).json({ message: "Set name must be 120 characters or fewer." })
         }
 
+        const lockedField = optionalBoolean(req.body, "locked")
+        if (!lockedField.ok) {
+            return res.status(400).json({ message: lockedField.message })
+        }
+
         const existing = await FolderSet.findOne({
             folder: id,
             deletedAt: null,
@@ -152,26 +239,30 @@ export const createFolderSet = async (req, res) => {
             .select("sortOrder")
             .lean()
 
-        const doc = await FolderSet.create({
+        const docFields = {
             folder: id,
             name,
             sortOrder: (maxOrder?.sortOrder ?? -1) + 1,
-        })
+            locked: false,
+            accessCode: null,
+            accessCodeVersion: 1,
+        }
+        if (lockedField.value === true) {
+            docFields.locked = true
+            docFields.accessCode = generateAccessCode()
+            docFields.accessCodeVersion = 1
+        }
+
+        const doc = await FolderSet.create(docFields)
 
         const payload = await buildSetsPayload(id)
+        const set = setRowFromPayload(payload, doc._id)
+        if (!set || (set.locked && !set.accessCode)) {
+            return res.status(500).json({ message: "Server error" })
+        }
         return res.status(201).json({
             message: "Set created",
-            set: {
-                _id: doc._id,
-                name: doc.name,
-                sortOrder: doc.sortOrder,
-                rawCount: 0,
-                selectionCount: 0,
-                finalCount: 0,
-                mediaCount: 0,
-                createdAt: doc.createdAt,
-                updatedAt: doc.updatedAt,
-            },
+            set,
             ...payload,
         })
     } catch (error) {
@@ -225,26 +316,31 @@ export const updateFolderSet = async (req, res) => {
             if (Number.isFinite(n)) set.sortOrder = Math.floor(n)
         }
 
+        const lockedField = optionalBoolean(req.body, "locked")
+        if (!lockedField.ok) {
+            return res.status(400).json({ message: lockedField.message })
+        }
+        const regenerateField = optionalBoolean(req.body, "regenerateAccessCode")
+        if (!regenerateField.ok) {
+            return res.status(400).json({ message: regenerateField.message })
+        }
+
+        if (regenerateField.value === true) {
+            regenerateSetAccessCode(set)
+        } else if (lockedField.present) {
+            if (lockedField.value) lockSet(set)
+            else unlockSet(set)
+        }
+
         await set.save()
         const payload = await buildSetsPayload(id)
+        const setRow = setRowFromPayload(payload, set._id)
+        if (!setRow || (setRow.locked && !setRow.accessCode)) {
+            return res.status(500).json({ message: "Server error" })
+        }
         return res.status(200).json({
             message: "Set updated",
-            set: {
-                _id: set._id,
-                name: set.name,
-                sortOrder: set.sortOrder,
-                rawCount:
-                    payload.sets.find((s) => String(s._id) === String(set._id))?.rawCount ?? 0,
-                selectionCount:
-                    payload.sets.find((s) => String(s._id) === String(set._id))
-                        ?.selectionCount ?? 0,
-                finalCount:
-                    payload.sets.find((s) => String(s._id) === String(set._id))?.finalCount ?? 0,
-                mediaCount:
-                    payload.sets.find((s) => String(s._id) === String(set._id))?.mediaCount ?? 0,
-                createdAt: set.createdAt,
-                updatedAt: set.updatedAt,
-            },
+            set: setRow,
             ...payload,
         })
     } catch (error) {
@@ -387,6 +483,73 @@ export const reorderFolderSets = async (req, res) => {
         })
     } catch (error) {
         console.error("Reorder folder sets error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+export const unlockSharedFolderSet = async (req, res) => {
+    try {
+        const { identifier, setId } = req.params
+        if (!mongoose.Types.ObjectId.isValid(setId)) {
+            return res.status(400).json({ message: "Invalid set id" })
+        }
+
+        const loaded = await loadActiveSharedFolder(identifier)
+        if (loaded.error) {
+            return res.status(loaded.error.status).json({ message: loaded.error.message })
+        }
+        const { folder } = loaded
+
+        const set = await FolderSet.findOne({
+            _id: setId,
+            folder: folder._id,
+            deletedAt: null,
+        })
+        if (!set) {
+            return res.status(404).json({ message: "Set not found" })
+        }
+        if (!set.locked) {
+            return res.status(400).json({ message: "This collection is not locked." })
+        }
+
+        const limitKey = unlockFailureKey(req, identifier, setId)
+        const limited = unlockAttemptLimited(limitKey)
+        if (limited.limited) {
+            res.set("Retry-After", String(limited.retryAfterSec))
+            return res.status(429).json({ message: "Too many attempts. Try again later." })
+        }
+
+        const provided = typeof req.body?.code === "string" ? req.body.code : ""
+        const stored = set.accessCode || ""
+        if (!stored || !accessCodesMatch(provided, stored)) {
+            recordUnlockFailure(limitKey)
+            return res.status(401).json({ message: "Invalid code" })
+        }
+
+        clearUnlockFailures(limitKey)
+
+        const activeSets = await FolderSet.find({
+            folder: folder._id,
+            deletedAt: null,
+        })
+            .select("_id locked accessCodeVersion")
+            .lean()
+        const previous = decodeSetAccessToken(
+            readRequestCookie(req, SET_ACCESS_COOKIE),
+            identifier
+        )
+        const sets = mergeUnlockedSets(previous?.sets, activeSets, set)
+        const ttlSec = setAccessTtlSeconds(folder)
+        const token = signSetAccessToken(identifier, sets, ttlSec)
+
+        res.cookie(SET_ACCESS_COOKIE, token, setAccessCookieOptions(identifier, ttlSec))
+        res.set("Cache-Control", "private, no-store")
+        return res.status(200).json({
+            unlocked: true,
+            setId: String(set._id),
+        })
+    } catch (error) {
+        console.error("Unlock shared folder set error:", error)
         return res.status(500).json({ message: "Server error" })
     }
 }

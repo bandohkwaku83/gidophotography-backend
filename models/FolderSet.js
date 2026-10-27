@@ -18,6 +18,21 @@ const folderSetSchema = new mongoose.Schema(
             type: Number,
             default: 0,
         },
+        /** Public when false. Existing sets stay unlocked until the studio locks them. */
+        locked: {
+            type: Boolean,
+            default: false,
+        },
+        /** Returned on studio routes only. Compared case-insensitively. */
+        accessCode: {
+            type: String,
+            default: null,
+        },
+        /** Server-only. Incremented when the code is regenerated so older cookies stop working. */
+        accessCodeVersion: {
+            type: Number,
+            default: 1,
+        },
         deletedAt: { type: Date, default: null, index: true },
     },
     { timestamps: true }

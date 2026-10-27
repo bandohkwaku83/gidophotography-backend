@@ -692,6 +692,35 @@ export async function applyGalleryMarkToStoredFinal(doc, folder) {
     }
 }
 
+/**
+ * Write only the stamp fields. `save()` matches on `__v`, and older media rows
+ * have no version field, so that update matches nothing and the stamp is lost.
+ */
+async function persistFinalMarkFields(doc) {
+    await FolderMedia.updateOne(
+        { _id: doc._id },
+        {
+            $set: {
+                markedFilePath: doc.markedFilePath || "",
+                markedThumbPath: doc.markedThumbPath || "",
+                markedVariants: Array.isArray(doc.markedVariants)
+                    ? doc.markedVariants
+                    : [],
+            },
+        }
+    )
+}
+
+/** One stamp job per folder. A newer save replaces a job that has not started. */
+const restampState = new Map()
+
+function snapshotFolderMark(folder) {
+    const mark = folder.galleryMark?.toObject
+        ? folder.galleryMark.toObject()
+        : { ...(folder.galleryMark || {}) }
+    return { _id: folder._id, galleryMark: mark }
+}
+
 /** Rebuild or remove stamps for every final still in the folder. */
 export async function restampFolderFinals(folder) {
     const docs = await FolderMedia.find({
@@ -699,12 +728,16 @@ export async function restampFolderFinals(folder) {
         kind: "final",
         ...ACTIVE_MEDIA_MATCH,
     })
+    console.log(
+        `[gallery-mark] stamping ${docs.length} final(s) for folder ${folder._id}`
+    )
     let logo = null
     try {
         if (isGalleryMarkActive(folder)) {
             logo = await materializeStoredFile(folder.galleryMark.logoPath)
         }
         for (const doc of docs) {
+            await new Promise((resolve) => setImmediate(resolve))
             try {
                 if (!logo || !isRasterStill(doc.mimeType)) {
                     await clearFinalMark(doc)
@@ -723,7 +756,7 @@ export async function restampFolderFinals(folder) {
                         }
                     }
                 }
-                await doc.save()
+                await persistFinalMarkFields(doc)
             } catch (error) {
                 console.warn(
                     "Gallery mark skipped:",
@@ -735,6 +768,43 @@ export async function restampFolderFinals(folder) {
     } finally {
         if (logo?.cleanup) await fs.promises.unlink(logo.path).catch(() => {})
     }
+    console.log(`[gallery-mark] finished folder ${folder._id}`)
+}
+
+async function drainRestamp(id) {
+    const state = restampState.get(id)
+    if (!state || state.running) return
+    state.running = true
+    try {
+        while (state.next) {
+            const snapshot = state.next
+            state.next = null
+            try {
+                await restampFolderFinals(snapshot)
+            } catch (error) {
+                console.error(
+                    `[gallery-mark] restamp failed for folder ${id}:`,
+                    error?.message || error
+                )
+            }
+        }
+    } finally {
+        state.running = false
+        if (state.next) {
+            void drainRestamp(id)
+        } else {
+            restampState.delete(id)
+        }
+    }
+}
+
+/** Run the stamp after the folder save, without holding the HTTP request. */
+export function scheduleRestampFolderFinals(folder) {
+    const id = String(folder._id)
+    const state = restampState.get(id) || { running: false, next: null }
+    state.next = snapshotFolderMark(folder)
+    restampState.set(id, state)
+    if (!state.running) void drainRestamp(id)
 }
 
 export function deliveryFileForFinal(folder, doc) {
