@@ -53,6 +53,12 @@ const folderSchema = new mongoose.Schema(
             min: 0,
             max: 100,
         },
+        /** Gallery photo currently used as the cover. The cover file itself is a separate copy. */
+        coverMediaId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "FolderMedia",
+            default: null,
+        },
         createdBy: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "User",

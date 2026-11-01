@@ -1,5 +1,6 @@
 import fs from "fs"
 import path from "path"
+import crypto from "crypto"
 import mongoose from "mongoose"
 import Folder from "../models/Folder.js"
 import FolderMedia, { EDIT_STATUSES } from "../models/FolderMedia.js"
@@ -31,6 +32,7 @@ import {
     isObjectStorageS3,
     uploadLocalFileThenRemove,
     deleteStoredAsset,
+    copyStoredAsset,
     unlinkLocalTempFile,
     getObjectStreamForStoredPath,
     readStoredAssetBufferLimited,
@@ -68,7 +70,7 @@ import {
     isWithinRestoreWindow,
     restoreDeadlineISO,
 } from "../utils/softDelete.js"
-import { reorderFolderMediaBucket } from "../utils/mediaSortOrder.js"
+import { allocateSortOrders, reorderFolderMediaBucket } from "../utils/mediaSortOrder.js"
 import {
     buildOrderedSetBuckets,
     galleryCollectionFieldsFromFolder,
@@ -76,6 +78,48 @@ import {
 import { loadShareSetAccess } from "../utils/collectionLock.js"
 
 const FOLDER_COLL = Folder.collection.name
+
+const COVER_IMAGE_MIME = new Set([
+    "image/jpeg",
+    "image/jpg",
+    "image/pjpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+])
+
+const COVER_IMAGE_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif"])
+
+function coverExtensionForMedia(doc) {
+    const mime = String(doc?.mimeType || "").toLowerCase()
+    if (mime === "image/png") return ".png"
+    if (mime === "image/webp") return ".webp"
+    if (mime === "image/gif") return ".gif"
+    const fromName = path.extname(doc?.originalFilename || "").toLowerCase()
+    if (fromName === ".png" || fromName === ".webp" || fromName === ".gif") return fromName
+    return ".jpg"
+}
+
+function isCoverImageMedia(doc) {
+    const mime = String(doc?.mimeType || "").toLowerCase()
+    if (mime.startsWith("video/")) return false
+    if (COVER_IMAGE_MIME.has(mime)) return true
+    const ext = path.extname(doc?.originalFilename || "").toLowerCase()
+    return COVER_IMAGE_EXT.has(ext)
+}
+
+async function clearCoverLinkIfMediaGone(folderId) {
+    const folder = await Folder.findById(folderId).select("coverMediaId")
+    if (!folder?.coverMediaId) return
+    const live = await FolderMedia.exists({
+        _id: folder.coverMediaId,
+        folder: folderId,
+        ...ACTIVE_MEDIA_MATCH,
+    })
+    if (!live) {
+        await Folder.updateOne({ _id: folderId }, { $set: { coverMediaId: null } })
+    }
+}
 
 /** Populate linked raw for selections — includes soft-deleted raws (hidden from uploads only). */
 const selectionRawPopulate = (rawSelect) => ({
@@ -1003,6 +1047,7 @@ const deleteFolderMediaCore = async (req, res, allowedKinds) => {
         doc.deletedAt = new Date()
         doc.deletedBy = "media"
         await doc.save()
+        await clearCoverLinkIfMediaGone(id)
 
         const payload = {
             message: "Media deleted (restorable from trash up to 30 days by default)",
@@ -1052,6 +1097,7 @@ export const deleteAllFolderRawMedia = async (req, res) => {
                 $set: { deletedAt: now, deletedBy: "media" },
             }
         )
+        await clearCoverLinkIfMediaGone(id)
 
         return res.status(200).json({
             message:
@@ -1085,6 +1131,7 @@ export const deleteAllFolderFinalMedia = async (req, res) => {
                 $set: { deletedAt: now, deletedBy: "media" },
             }
         )
+        await clearCoverLinkIfMediaGone(id)
 
         return res.status(200).json({
             message:
@@ -1145,6 +1192,230 @@ export const patchSelectionEditStatus = async (req, res) => {
     } catch (error) {
         console.error("Patch selection status error:", error)
         return res.status(500).json({ message: "Server error" })
+    }
+}
+
+/**
+ * Move raw or final photos into another collection in this gallery,
+ * or into a collection on a different gallery.
+ * Body: { kind, mediaIds, targetFolderId, targetSetId }
+ * `targetSetId` null / "general" = the uncategorized collection.
+ */
+export const moveFolderMedia = async (req, res) => {
+    try {
+        const { id } = req.params
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ message: "Invalid folder id" })
+        }
+
+        const kind = req.body?.kind === "final" ? "final" : req.body?.kind === "raw" ? "raw" : ""
+        if (!kind) {
+            return res.status(400).json({ message: "kind must be raw or final" })
+        }
+
+        const rawIds = Array.isArray(req.body?.mediaIds)
+            ? req.body.mediaIds
+            : req.body?.mediaId
+              ? [req.body.mediaId]
+              : []
+        const mediaIds = [
+            ...new Set(
+                rawIds
+                    .map((value) => String(value || "").trim())
+                    .filter(Boolean)
+            ),
+        ]
+        if (!mediaIds.length || mediaIds.length > 200) {
+            return res.status(400).json({ message: "Choose between 1 and 200 photos to move" })
+        }
+        if (mediaIds.some((mediaId) => !mongoose.Types.ObjectId.isValid(mediaId))) {
+            return res.status(400).json({ message: "Invalid photo id" })
+        }
+
+        const folder = await Folder.findOne({ _id: id, deletedAt: null })
+        if (!folder) {
+            return res.status(404).json({ message: "Folder not found" })
+        }
+
+        const targetFolderRaw = req.body?.targetFolderId ?? req.body?.target_folder_id ?? id
+        const targetFolderId = String(targetFolderRaw || "").trim()
+        if (!mongoose.Types.ObjectId.isValid(targetFolderId)) {
+            return res.status(400).json({ message: "Invalid destination gallery" })
+        }
+        const targetFolder = await Folder.findOne({ _id: targetFolderId, deletedAt: null })
+        if (!targetFolder) {
+            return res.status(404).json({ message: "Destination gallery not found" })
+        }
+
+        const parsedSetId = parseSetIdInput(
+            req.body?.targetSetId ?? req.body?.target_set_id ?? req.body?.setId ?? null
+        )
+        if (parsedSetId === "__invalid__") {
+            return res.status(400).json({ message: "Invalid collection" })
+        }
+        const targetSetId = parsedSetId ?? null
+        if (targetSetId) {
+            const setDoc = await FolderSet.findOne({
+                _id: targetSetId,
+                folder: targetFolder._id,
+                deletedAt: null,
+            })
+            if (!setDoc) {
+                return res.status(404).json({ message: "Collection not found in that gallery" })
+            }
+        }
+
+        const docs = await FolderMedia.find({
+            _id: { $in: mediaIds },
+            folder: id,
+            kind,
+            ...ACTIVE_MEDIA_MATCH,
+        })
+        if (docs.length !== mediaIds.length) {
+            return res.status(400).json({
+                message: "One or more photos are not in this gallery.",
+            })
+        }
+
+        const moving = docs.filter((doc) => {
+            const sameFolder = String(doc.folder) === String(targetFolder._id)
+            const sameSet = String(doc.set || "") === String(targetSetId || "")
+            return !(sameFolder && sameSet)
+        })
+        if (!moving.length) {
+            return res.status(200).json({
+                message: "Already in that collection.",
+                movedCount: 0,
+            })
+        }
+
+        moving.sort((a, b) => {
+            const order = (a.sortOrder ?? 0) - (b.sortOrder ?? 0)
+            if (order !== 0) return order
+            return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+        })
+
+        const orders = await allocateSortOrders(
+            targetFolder._id,
+            kind,
+            targetSetId,
+            moving.length
+        )
+        const leavingFolder = String(targetFolder._id) !== String(folder._id)
+        const bulk = moving.map((doc, index) => {
+            const $set = {
+                folder: targetFolder._id,
+                set: targetSetId,
+                sortOrder: orders[index],
+            }
+            if (kind === "final" && leavingFolder) {
+                $set.selectionMediaId = null
+            }
+            return {
+                updateOne: {
+                    filter: { _id: doc._id },
+                    update: { $set },
+                },
+            }
+        })
+        await FolderMedia.bulkWrite(bulk)
+
+        if (kind === "raw") {
+            await FolderMedia.updateMany(
+                {
+                    kind: "selection",
+                    rawMediaId: { $in: moving.map((doc) => doc._id) },
+                    ...ACTIVE_MEDIA_MATCH,
+                },
+                { $set: { folder: targetFolder._id, set: targetSetId } }
+            )
+        }
+
+        if (
+            leavingFolder &&
+            folder.coverMediaId &&
+            moving.some((doc) => String(doc._id) === String(folder.coverMediaId))
+        ) {
+            folder.coverMediaId = null
+            await folder.save()
+        }
+
+        const movedCount = moving.length
+        return res.status(200).json({
+            message: movedCount === 1 ? "Photo moved." : `${movedCount} photos moved.`,
+            movedCount,
+            kind,
+            targetFolderId: String(targetFolder._id),
+            targetSetId,
+        })
+    } catch (error) {
+        console.error("Move folder media error:", error)
+        return res.status(500).json({ message: "Server error" })
+    }
+}
+
+/** Copy a raw or final still onto the gallery cover. Videos are rejected. */
+export const setFolderCoverFromMedia = async (req, res) => {
+    let newCoverPath = ""
+    let copied = false
+    try {
+        const { id, mediaId } = req.params
+        if (
+            !mongoose.Types.ObjectId.isValid(id) ||
+            !mongoose.Types.ObjectId.isValid(mediaId)
+        ) {
+            return res.status(400).json({ message: "Invalid id" })
+        }
+
+        const folder = await Folder.findOne({ _id: id, deletedAt: null })
+        if (!folder) {
+            return res.status(404).json({ message: "Folder not found" })
+        }
+
+        const doc = await FolderMedia.findOne({
+            _id: mediaId,
+            folder: id,
+            kind: { $in: ["raw", "final"] },
+            ...ACTIVE_MEDIA_MATCH,
+        })
+        if (!doc) {
+            return res.status(404).json({ message: "Photo not found" })
+        }
+        if (!isCoverImageMedia(doc) || !doc.filePath) {
+            return res.status(400).json({ message: "Choose a photo to use as the cover." })
+        }
+
+        const filename = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}${coverExtensionForMedia(doc)}`
+        newCoverPath = path.posix.join("uploads", "covers", filename)
+        await copyStoredAsset(doc.filePath, newCoverPath)
+        copied = true
+
+        const previous = folder.coverImage
+        const wasDefault = folder.usingDefaultCover
+        folder.coverImage = newCoverPath
+        folder.usingDefaultCover = false
+        folder.coverFocalX = 50
+        folder.coverFocalY = 50
+        folder.coverMediaId = doc._id
+        await folder.save()
+
+        if (!wasDefault && previous && previous !== newCoverPath) {
+            await deleteStoredAsset(previous)
+        }
+
+        return res.status(200).json({
+            message: "Cover image updated.",
+            coverMediaId: String(doc._id),
+        })
+    } catch (error) {
+        if (copied && newCoverPath) {
+            await deleteStoredAsset(newCoverPath).catch(() => {})
+        }
+        console.error("Set cover from media error:", error)
+        const missing = /not found|NoSuchKey|NotFound/i.test(String(error?.message || error?.name || ""))
+        return res.status(missing ? 400 : 500).json({
+            message: missing ? "This photo's file could not be copied." : "Server error",
+        })
     }
 }
 

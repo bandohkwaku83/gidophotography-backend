@@ -124,6 +124,7 @@ const serializeFolder = (req, folder) => {
         maxClientSelections,
         status: obj.status || "draft",
         coverImageUrl: buildPublicAssetUrl(req, obj.coverImage),
+        coverMediaId: obj.coverMediaId ? String(obj.coverMediaId) : null,
         galleryMark: publicGalleryMark(req, obj),
         backgroundMusicUrl:
             bgmOn && obj.backgroundMusic
@@ -508,6 +509,7 @@ export const updateFolder = async (req, res) => {
             }
             folder.coverImage = newCoverPath
             folder.usingDefaultCover = false
+            folder.coverMediaId = null
         } else if (
             useDefaultCover === true ||
             useDefaultCover === "true" ||
@@ -524,6 +526,7 @@ export const updateFolder = async (req, res) => {
                 await deleteStoredAsset(folder.coverImage)
             folder.coverImage = settings.defaultCoverImage
             folder.usingDefaultCover = true
+            folder.coverMediaId = null
         }
 
         const rawFx = pickCoverFocalRaw(req.body, "x")

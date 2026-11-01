@@ -4,6 +4,7 @@ import https from "https"
 import {
     S3Client,
     PutObjectCommand,
+    CopyObjectCommand,
     DeleteObjectCommand,
     GetObjectCommand,
 } from "@aws-sdk/client-s3"
@@ -169,6 +170,42 @@ export async function uploadLocalFileThenRemove(
         })
     )
     await fs.promises.unlink(localAbsolutePath).catch(() => {})
+}
+
+/**
+ * Copy a stored object to another key. Used when a gallery photo becomes the cover,
+ * so deleting or moving the photo later does not remove the cover file.
+ */
+export async function copyStoredAsset(fromStoredPath, toStoredPath) {
+    const fromKey = objectKeyFromStoredPath(fromStoredPath)
+    const toKey = objectKeyFromStoredPath(toStoredPath)
+    if (!fromKey || !toKey) {
+        throw new Error("Missing stored path")
+    }
+    if (fromKey === toKey) return
+
+    if (isObjectStorageS3()) {
+        const encoded = fromKey
+            .split("/")
+            .map((part) => encodeURIComponent(part))
+            .join("/")
+        await getS3().send(
+            new CopyObjectCommand({
+                Bucket: process.env.S3_BUCKET,
+                CopySource: `${process.env.S3_BUCKET}/${encoded}`,
+                Key: toKey,
+            })
+        )
+        return
+    }
+
+    const fromAbs = resolveLocalAbsolutePath(fromStoredPath)
+    const toAbs = resolveLocalAbsolutePath(toStoredPath)
+    if (!fromAbs || !toAbs || !fs.existsSync(fromAbs)) {
+        throw new Error("Source file not found")
+    }
+    await fs.promises.mkdir(path.dirname(toAbs), { recursive: true })
+    await fs.promises.copyFile(fromAbs, toAbs)
 }
 
 export async function getObjectStreamForStoredPath(storedPath) {

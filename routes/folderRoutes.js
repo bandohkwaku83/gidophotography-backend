@@ -41,6 +41,8 @@ import {
     patchSelectionEditStatus,
     patchFolderStatus,
     reorderFolderMedia,
+    moveFolderMedia,
+    setFolderCoverFromMedia,
 } from "../controllers/folderMediaController.js"
 import { protect } from "../middleware/auth.js"
 import {
@@ -75,6 +77,8 @@ router.delete("/:id/sets/:setId", deleteFolderSet)
 router.post("/:id/media/duplicate-preview", previewUploadDuplicates)
 router.patch("/:id/gallery-collections", patchGalleryCollections)
 router.patch("/:id/media/reorder", reorderFolderMedia)
+router.post("/:id/media/move", moveFolderMedia)
+router.post("/:id/media/:mediaId/cover", setFolderCoverFromMedia)
 router.post("/:id/media/raw", uploadFolderRaw, uploadRawMedia)
 router.post("/:id/media/final", uploadFolderFinal, uploadFinalMedia)
 router.delete("/:id/media/raw", deleteAllFolderRawMedia)
